@@ -6,7 +6,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
-API_TOKEN = os.getenv("BOT_TOKEN")
+API_TOKEN = os.getenv("8754097637:AAGSyoW-LHjwJ3j87Krnh1eue0bnKkBb3X4")
 
 GROUP_NEW = -1003735668749
 GROUP_DESIGN = -1003867470006
