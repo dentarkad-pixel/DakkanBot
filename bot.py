@@ -25,6 +25,13 @@ class OrderState(StatesGroup):
     phone = State()
     city = State()
     area = State()
+    order_type = State()
+    pieces = State()
+    over_type = State()
+    hand_type = State()
+    size = State()
+    notes = State()
+    images = State()
 
 # ================= START =================
 @dp.message_handler(commands=['start'])
@@ -55,30 +62,136 @@ async def get_city(msg: types.Message, state: FSMContext):
     await msg.answer("🏘 المنطقة:")
     await OrderState.area.set()
 
+# ================= ORDER TYPE =================
+def order_type_kb():
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("طباعة", callback_data="type_print"),
+        InlineKeyboardButton("تطريز", callback_data="type_emb")
+    )
+    return kb
+
 @dp.message_handler(state=OrderState.area)
-async def finish_order(msg: types.Message, state: FSMContext):
-    global order_id
-    order_id += 1
+async def get_area(msg: types.Message, state: FSMContext):
+    await state.update_data(area=msg.text)
+    await msg.answer("اختر نوع الطلب:", reply_markup=order_type_kb())
+    await OrderState.order_type.set()
 
+@dp.callback_query_handler(lambda c: c.data.startswith("type"), state=OrderState.order_type)
+async def choose_type(call: types.CallbackQuery, state: FSMContext):
+    t = "طباعة" if call.data == "type_print" else "تطريز"
+    await state.update_data(order_type=t)
+    await call.message.answer("اختر القطع ثم اضغط تم:", reply_markup=pieces_kb([]))
+    await state.update_data(pieces=[])
+    await OrderState.pieces.set()
+
+# ================= PIECES =================
+pieces_list = ["سيت 3","سيت 6","أوفر","كلو","صدرية","حضينة وكماط","ملحف"]
+
+def pieces_kb(selected):
+    kb = InlineKeyboardMarkup(row_width=2)
+    for p in pieces_list:
+        mark = "✅ " if p in selected else ""
+        kb.insert(InlineKeyboardButton(mark+p, callback_data=f"piece_{p}"))
+    kb.add(InlineKeyboardButton("✔️ تم", callback_data="done_pieces"))
+    return kb
+
+@dp.callback_query_handler(lambda c: c.data.startswith("piece"), state=OrderState.pieces)
+async def choose_pieces(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    selected = data.get("pieces", [])
+    piece = call.data.split("_")[1]
 
-    text = f"""
-📦 طلب جديد #{order_id}
+    if piece in selected:
+        selected.remove(piece)
+    else:
+        selected.append(piece)
 
-👤 الاسم: {data['name']}
-📞 الرقم: {data['phone']}
-📍 المدينة: {data['city']}
-🏘 المنطقة: {msg.text}
+    await state.update_data(pieces=selected)
+    await call.message.edit_reply_markup(reply_markup=pieces_kb(selected))
 
-الحالة: ⏳ جديد
-"""
+# ================= OVER / HAND =================
+@dp.callback_query_handler(lambda c: c.data == "done_pieces", state=OrderState.pieces)
+async def done_pieces(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    pieces = data.get("pieces", [])
 
-    await bot.send_message(GROUP_NEW, text, reply_markup=new_buttons())
-    await msg.answer("✅ تم إرسال الطلب")
-    await state.finish()
+    if "أوفر" in pieces:
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("دانتيل", callback_data="over_دانتيل"),
+            InlineKeyboardButton("طباكات", callback_data="over_طباكات"),
+            InlineKeyboardButton("صفح", callback_data="over_صفح"),
+            InlineKeyboardButton("دانتيل طباكات", callback_data="over_دانتيل طباكات")
+        )
+        await call.message.answer("نوع الأوفر:", reply_markup=kb)
+        await OrderState.over_type.set()
 
-# ================= BUTTONS =================
+    elif "ملحف" in pieces:
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("كشكش", callback_data="hand_كشكش"),
+            InlineKeyboardButton("حب الرمان", callback_data="hand_حب")
+        )
+        await call.message.answer("نوع الملحف:", reply_markup=kb)
+        await OrderState.hand_type.set()
 
+    else:
+        await ask_size(call.message)
+        await OrderState.size.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("over"), state=OrderState.over_type)
+async def choose_over(call: types.CallbackQuery, state: FSMContext):
+    await state.update_data(over_type=call.data.split("_")[1])
+    await ask_size(call.message)
+    await OrderState.size.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("hand"), state=OrderState.hand_type)
+async def choose_hand(call: types.CallbackQuery, state: FSMContext):
+    await state.update_data(hand_type=call.data.split("_")[1])
+    await ask_size(call.message)
+    await OrderState.size.set()
+
+# ================= SIZE =================
+sizes = ["حديثي ولادة","1","2","3","4","5","6","7","8","9","10","11","12"]
+
+def size_kb():
+    kb = InlineKeyboardMarkup(row_width=4)
+    for s in sizes:
+        kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
+    return kb
+
+async def ask_size(msg):
+    await msg.answer("اختر القياس:", reply_markup=size_kb())
+
+@dp.callback_query_handler(lambda c: c.data.startswith("size"), state=OrderState.size)
+async def get_size(call: types.CallbackQuery, state: FSMContext):
+    await state.update_data(size=call.data.split("_")[1])
+    await call.message.answer("📝 اكتب ملاحظات (او اكتب لا):")
+    await OrderState.notes.set()
+
+# ================= NOTES =================
+@dp.message_handler(state=OrderState.notes)
+async def get_notes(msg: types.Message, state: FSMContext):
+    notes = "لا يوجد" if msg.text == "لا" else msg.text
+    await state.update_data(notes=notes)
+    await msg.answer("📸 ارسل الصور (1-4) ثم اكتب تم")
+    await state.update_data(images=[])
+    await OrderState.images.set()
+
+# ================= IMAGES =================
+@dp.message_handler(content_types=['photo'], state=OrderState.images)
+async def get_images(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    images = data.get("images", [])
+
+    if len(images) >= 4:
+        await msg.answer("❌ الحد الأقصى 4 صور")
+        return
+
+    images.append(msg.photo[-1].file_id)
+    await state.update_data(images=images)
+    await msg.answer(f"تم حفظ الصورة ({len(images)}/4)")
+
+# ================= FINISH =================
 def new_buttons():
     kb = InlineKeyboardMarkup()
     kb.add(
@@ -87,77 +200,36 @@ def new_buttons():
     )
     return kb
 
-def design_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("📦 جاهز", callback_data="ready"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="issues")
-    )
-    return kb
+@dp.message_handler(lambda m: m.text == "تم", state=OrderState.images)
+async def finish(msg: types.Message, state: FSMContext):
+    global order_id
+    order_id += 1
 
-def ready_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🚚 تم الإرسال", callback_data="sent"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="issues")
-    )
-    return kb
+    data = await state.get_data()
 
-def issues_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🆕 رجوع جديد", callback_data="back_new"),
-        InlineKeyboardButton("🎨 رجوع تصميم", callback_data="back_design"),
-        InlineKeyboardButton("📦 رجوع جاهز", callback_data="back_ready"),
-        InlineKeyboardButton("🚚 رجوع إرسال", callback_data="back_sent"),
-    )
-    return kb
+    text = f"""
+📦 طلب #{order_id}
 
-# ================= MOVEMENT =================
+👤 {data['name']}
+📞 {data['phone']}
+📍 {data['city']} - {data['area']}
 
-@dp.callback_query_handler(lambda c: c.data == "design")
-async def move_design(call: types.CallbackQuery):
-    text = call.message.text.replace("جديد", "🎨 تم التصميم")
-    await bot.send_message(GROUP_DESIGN, text, reply_markup=design_buttons())
-    await call.message.delete()
+🧵 النوع: {data['order_type']}
+👕 القطع: {", ".join(data['pieces'])}
+📏 القياس: {data['size']}
 
-@dp.callback_query_handler(lambda c: c.data == "ready")
-async def move_ready(call: types.CallbackQuery):
-    text = call.message.text.replace("تم التصميم", "📦 جاهز")
-    await bot.send_message(GROUP_READY, text, reply_markup=ready_buttons())
-    await call.message.delete()
+📝 {data['notes']}
 
-@dp.callback_query_handler(lambda c: c.data == "sent")
-async def move_sent(call: types.CallbackQuery):
-    text = call.message.text.replace("جاهز", "🚚 تم الإرسال")
-    await bot.send_message(GROUP_SENT, text)
-    await call.message.delete()
+الحالة: ⏳ جديد
+"""
 
-@dp.callback_query_handler(lambda c: c.data == "issues")
-async def move_issues(call: types.CallbackQuery):
-    text = call.message.text + "\n⚠️ مشكلة"
-    await bot.send_message(GROUP_ISSUES, text, reply_markup=issues_buttons())
-    await call.message.delete()
+    sent = await bot.send_message(GROUP_NEW, text, reply_markup=new_buttons())
 
-# ================= RETURN FROM ISSUES =================
+    for img in data.get("images", []):
+        await bot.send_photo(GROUP_NEW, img, reply_to_message_id=sent.message_id)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("back"))
-async def back_handler(call: types.CallbackQuery):
-    text = call.message.text.replace("⚠️ مشكلة", "")
-
-    if call.data == "back_new":
-        await bot.send_message(GROUP_NEW, text, reply_markup=new_buttons())
-
-    elif call.data == "back_design":
-        await bot.send_message(GROUP_DESIGN, text, reply_markup=design_buttons())
-
-    elif call.data == "back_ready":
-        await bot.send_message(GROUP_READY, text, reply_markup=ready_buttons())
-
-    elif call.data == "back_sent":
-        await bot.send_message(GROUP_SENT, text)
-
-    await call.message.delete()
+    await msg.answer("✅ تم إرسال الطلب")
+    await state.finish()
 
 # ================= RUN =================
 if __name__ == "__main__":
