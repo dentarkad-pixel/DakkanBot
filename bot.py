@@ -88,7 +88,7 @@ def save_to_excel(data):
             "رقم الطلب","الاسم","الهاتف","المدينة","المنطقة",
             "النوع","القطع","الأوفر","الملحف",
             "لون البوكس","عدد التوزيعات",
-            "القياس","السعر","ملاحظات"
+            "ا��قياس","السعر","ملاحظات"
         ])
         wb.save(file)
 
@@ -345,7 +345,7 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         return
 
     if need_box:
-        await ask_box(call.message)
+        await call.message.answer("🎁 اختر لون البوكس:", reply_markup=box_color_kb())
         await OrderState.box_color.set()
         return
 
@@ -376,7 +376,7 @@ async def choose_over(call: types.CallbackQuery, state: FSMContext):
         return
     
     if data.get("need_box"):
-        await ask_box(call.message)
+        await call.message.answer("🎁 اختر لون البوكس:", reply_markup=box_color_kb())
         await OrderState.box_color.set()
         return
     
@@ -398,7 +398,7 @@ async def choose_hand(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
     if data.get("need_box"):
-        await ask_box(call.message)
+        await call.message.answer("🎁 اختر لون البوكس:", reply_markup=box_color_kb())
         await OrderState.box_color.set()
         return
     
@@ -411,15 +411,15 @@ async def choose_hand(call: types.CallbackQuery, state: FSMContext):
     await OrderState.size.set()
 
 # ================= BOX COLOR =================
-def ask_box(msg):
-    """اسأل عن لون البوكس"""
+def box_color_kb():
+    """لوحة مفاتيح لون البوكس"""
     kb = InlineKeyboardMarkup(row_width=2).add(
         InlineKeyboardButton("⚪ أبيض", callback_data="box_أبيض"),
         InlineKeyboardButton("⚫ رصاصي", callback_data="box_رصاصي"),
         InlineKeyboardButton("🩷 وردي", callback_data="box_وردي"),
         InlineKeyboardButton("🩵 سماوي", callback_data="box_سماوي")
     )
-    return msg.answer("🎁 اختر لون البوكس:", reply_markup=kb)
+    return kb
 
 @dp.callback_query_handler(lambda c: c.data.startswith("box_"), state=OrderState.box_color)
 async def choose_box(call: types.CallbackQuery, state: FSMContext):
