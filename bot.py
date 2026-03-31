@@ -5,7 +5,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMedia
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-
 from openpyxl import Workbook, load_workbook
 
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -41,7 +40,6 @@ class OrderState(StatesGroup):
 # ================= EXCEL =================
 def save_to_excel(data):
     file = "orders.xlsx"
-
     if not os.path.exists(file):
         wb = Workbook()
         ws = wb.active
@@ -193,6 +191,39 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         await ask_size(call.message)
         await OrderState.size.set()
 
+# ================= OVER FIX =================
+@dp.callback_query_handler(lambda c: c.data.startswith("over"), state=OrderState.over_type)
+async def choose_over(call: types.CallbackQuery, state: FSMContext):
+    over_choice = call.data.split("_")[1]
+    await state.update_data(over_type=over_choice)
+
+    data = await state.get_data()
+    need_hand = data.get("need_hand", False)
+    need_box = data.get("need_box", False)
+    need_dist = data.get("need_dist", False)
+
+    if need_hand:
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("كشكش", callback_data="hand_كشكش"),
+            InlineKeyboardButton("حب الرمان", callback_data="hand_حب")
+        )
+        await call.message.answer("🛏 نوع الملحف:", reply_markup=kb)
+        await OrderState.hand_type.set()
+        return
+
+    if need_box:
+        await ask_box(call.message)
+        await OrderState.box_color.set()
+        return
+
+    if need_dist:
+        await call.message.answer("🎉 اكتب عدد التوزيعات:")
+        await OrderState.dist_count.set()
+        return
+
+    await ask_size(call.message)
+    await OrderState.size.set()
+
 # ================= BOX =================
 def ask_box(msg):
     kb = InlineKeyboardMarkup().add(
@@ -207,9 +238,8 @@ def ask_box(msg):
 async def choose_box(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(box_color=call.data.split("_")[1])
     data = await state.get_data()
-
     if data.get("need_dist"):
-        await call.message.answer("اكتب عدد التوزيعات:")
+        await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
     else:
         await ask_size(call.message)
@@ -261,11 +291,9 @@ async def get_notes(msg: types.Message, state: FSMContext):
 async def get_images(msg: types.Message, state: FSMContext):
     data = await state.get_data()
     images = data.get("images", [])
-
     if len(images) >= 4:
         await msg.answer("❌ الحد الأقصى 4 صور")
         return
-
     images.append(msg.photo[-1].file_id)
     await state.update_data(images=images)
     await msg.answer(f"تم حفظ الصورة ({len(images)}/4)")
@@ -314,12 +342,10 @@ async def finish(msg: types.Message, state: FSMContext):
     order_id += 1
 
     data = await state.get_data()
-
     over = data.get("over_type", "لا يوجد")
     hand = data.get("hand_type", "لا يوجد")
     box = data.get("box_color", "لا يوجد")
     dist = data.get("dist_count", "لا يوجد")
-
     images_text = "|".join(data.get("images", []))
 
     text = f"""
@@ -346,9 +372,7 @@ async def finish(msg: types.Message, state: FSMContext):
 
 الحالة: ⏳ جديد
 """
-
     await bot.send_message(GROUP_NEW, text, reply_markup=new_buttons())
-
     if data.get("images"):
         media = [InputMediaPhoto(media=i) for i in data["images"]]
         await bot.send_media_group(GROUP_NEW, media)
@@ -360,15 +384,11 @@ async def finish(msg: types.Message, state: FSMContext):
 async def move_with_images(call, target_group, buttons=None, new_text=None):
     original_text = call.message.text
     images = extract_images(original_text)
-
     text = new_text if new_text else original_text
-
     await bot.send_message(target_group, text, reply_markup=buttons)
-
     if images:
         media = [InputMediaPhoto(media=i) for i in images]
         await bot.send_media_group(target_group, media)
-
     try:
         await bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
@@ -378,26 +398,23 @@ async def move_with_images(call, target_group, buttons=None, new_text=None):
 @dp.callback_query_handler(lambda c: c.data == "sent")
 async def move_sent(call: types.CallbackQuery):
     text = call.message.text.replace("جاهز", "🚚 تم الإرسال")
-
     lines = text.split("\n")
-
     data = {
-        "id": lines[1].replace("📦 طلب #", "").strip(),
-        "name": lines[3].replace("👤", "").strip(),
-        "phone": lines[4].replace("📞", "").strip(),
-        "city": lines[5].split("-")[0].replace("📍", "").strip(),
+        "id": lines[1].replace("📦 طلب #","").strip(),
+        "name": lines[3].replace("👤","").strip(),
+        "phone": lines[4].replace("📞","").strip(),
+        "city": lines[5].split("-")[0].replace("📍","").strip(),
         "area": lines[5].split("-")[1].strip(),
-        "type": lines[7].replace("🧵 النوع:", "").strip(),
-        "pieces": lines[8].replace("👕 القطع:", "").strip(),
-        "over": lines[10].replace("👗 الأوفر:", "").strip(),
-        "hand": lines[11].replace("🛏 الملحف:", "").strip(),
-        "box": lines[12].replace("🎁 لون البوكس:", "").strip(),
-        "dist": lines[13].replace("🎉 عدد التوزيعات:", "").strip(),
-        "size": lines[15].replace("📏 القياس:", "").strip(),
-        "price": lines[16].replace("💰 السعر:", "").strip(),
-        "notes": lines[18].replace("📝", "").strip(),
+        "type": lines[7].replace("🧵 النوع:","").strip(),
+        "pieces": lines[8].replace("👕 القطع:","").strip(),
+        "over": lines[10].replace("👗 الأوفر:","").strip(),
+        "hand": lines[11].replace("🛏 الملحف:","").strip(),
+        "box": lines[12].replace("🎁 لون البوكس:","").strip(),
+        "dist": lines[13].replace("🎉 عدد التوزيعات:","").strip(),
+        "size": lines[15].replace("📏 القياس:","").strip(),
+        "price": lines[16].replace("💰 السعر:","").strip(),
+        "notes": lines[18].replace("📝","").strip(),
     }
-
     save_to_excel(data)
     await move_with_images(call, GROUP_SENT, None, text)
 
@@ -419,17 +436,13 @@ async def move_issues(call: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("back"))
 async def back_from_issues(call: types.CallbackQuery):
-    text = call.message.text.replace("\n⚠️ مشكلة", "")
-
+    text = call.message.text.replace("\n⚠️ مشكلة","")
     if call.data == "back_new":
         await move_with_images(call, GROUP_NEW, new_buttons(), text)
-
     elif call.data == "back_design":
         await move_with_images(call, GROUP_DESIGN, design_buttons(), text)
-
     elif call.data == "back_ready":
         await move_with_images(call, GROUP_READY, ready_buttons(), text)
-
     elif call.data == "back_sent":
         await move_with_images(call, GROUP_SENT, None, text)
 
