@@ -41,7 +41,7 @@ GROUPS_NAMES = {
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# قاموس لتخزين معلومات الطلبات (تخزين مؤقت في الذاكرة)
+# قاموس لتخزين معلومات الطلبات
 orders_data = {}
 
 # ================= STATES =================
@@ -169,8 +169,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 
     group_display = GROUPS_NAMES.get(GROUPS_MAP.get(current_group), "غير معروف")
 
-    text = f"""
-📦 *طلب #{order_id}*
+    text = f"""📦 *طلب #{order_id}*
 
 👤 *الاسم:* {data['name']}
 📞 *الهاتف:* {data['phone']}
@@ -191,8 +190,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 {data['notes']}
 
 ━━━━━━━━━━━━━━━━━━
-📍 *الحالة الحالية:* {group_display}
-"""
+📍 *الحالة الحالية:* {group_display}"""
     return text
 
 # ================= START =================
@@ -516,47 +514,57 @@ async def get_images(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.images)
 async def finish_order(msg: types.Message, state: FSMContext):
-    """إنهاء الطلب وإرساله - معالج لأي رسالة نصية في حالة الصور"""
+    """إنهاء الطلب وإرساله - معالج عام لأي رسالة نصية"""
     text_input = msg.text.strip().lower()
     
-    # التحقق من أن الرسالة تحتوي على كلمة "تم"
+    # التحقق من كلمة "تم"
     if "تم" not in text_input and text_input != "done":
         await msg.answer("❌ اكتب 'تم' لإنهاء الطلب أو أرسل صورة (1-4)")
         return
     
-    order_id = get_next_order_id()
-    data = await state.get_data()
-    images_list = data.get("images", [])
-
-    # احفظ بيانات الطلب في الذاكرة
-    orders_data[order_id] = {
-        "data": data,
-        "images": images_list,
-        "current_group": "new"
-    }
-
-    # احفظ في الإكسل
-    await save_to_excel({**data, "id": order_id})
-
-    # نسق نص الطلب
-    text = format_order_text(data, order_id, "new")
-    
-    # أزرار الحالة
-    status_kb = get_status_buttons(order_id, "new")
-
-    # إرسال الصور أولاً إذا كانت موجودة
     try:
+        order_id = get_next_order_id()
+        data = await state.get_data()
+        images_list = data.get("images", [])
+
+        # احفظ بيانات الطلب في الذاكرة
+        orders_data[order_id] = {
+            "data": data,
+            "images": images_list,
+            "current_group": "new"
+        }
+
+        # احفظ في الإكسل
+        await save_to_excel({**data, "id": order_id})
+
+        # نسق نص الطلب
+        text = format_order_text(data, order_id, "new")
+        
+        # أزرار الحالة
+        status_kb = get_status_buttons(order_id, "new")
+
+        # إرسال الصور أولاً إذا كانت موجودة
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            await bot.send_media_group(GROUP_NEW, media)
+            print(f"📸 إرسال {len(images_list)} صور للكروب {GROUP_NEW}")
+            await bot.send_media_group(chat_id=GROUP_NEW, media=media)
         
         # إرسال نص الطلب مع الأزرار
-        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb, parse_mode='Markdown')
-        await msg.answer("✅ تم إنشاء الطلب بنجاح!")
+        print(f"📝 إرسال نص الطلب #{order_id} للكروب {GROUP_NEW}")
+        msg_result = await bot.send_message(
+            chat_id=GROUP_NEW, 
+            text=text, 
+            reply_markup=status_kb, 
+            parse_mode='Markdown'
+        )
+        
+        print(f"✅ تم إرسال الطلب #{order_id} بنجاح (Message ID: {msg_result.message_id})")
+        await msg.answer(f"✅ تم إنشاء الطلب بنجاح!\n\n📌 رقم الطلب: {order_id}")
     
     except Exception as e:
-        await msg.answer(f"❌ خطأ: {str(e)}")
-        print(f"❌ خطأ في إرسال الطلب: {e}")
+        error_msg = f"❌ خطأ في الإرسال: {str(e)}"
+        print(f"❌ {error_msg}\nتفاصيل: {type(e).__name__}: {e}")
+        await msg.answer(error_msg)
 
     await state.finish()
 
@@ -597,9 +605,16 @@ async def move_order(call: types.CallbackQuery):
         # أرسل الصور والنص في الكروب الجديد
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            await bot.send_media_group(target_group_id, media)
+            print(f"📸 نقل {len(images_list)} صور للكروب {target_group_id}")
+            await bot.send_media_group(chat_id=target_group_id, media=media)
         
-        await bot.send_message(target_group_id, text, reply_markup=status_kb, parse_mode='Markdown')
+        print(f"📝 نقل نص الطلب #{order_id} للكروب {target_group_id}")
+        await bot.send_message(
+            chat_id=target_group_id, 
+            text=text, 
+            reply_markup=status_kb, 
+            parse_mode='Markdown'
+        )
 
         # احذف الرسالة من الكروب السابق
         await call.message.delete()
@@ -610,13 +625,21 @@ async def move_order(call: types.CallbackQuery):
         target_group_display = GROUPS_NAMES.get(target_group_id, "غير معروف")
         await call.answer(f"✅ تم نقل الطلب إلى {target_group_display}", show_alert=False)
 
-    except ValueError:
+    except ValueError as ve:
+        print(f"❌ خطأ في القيمة: {ve}")
         await call.answer("❌ خطأ في معالجة الطلب!", show_alert=True)
     except Exception as e:
-        print(f"❌ خطأ في نقل الطلب: {e}")
-        await call.answer(f"❌ خطأ: {str(e)}", show_alert=True)
+        error_msg = f"❌ خطأ في نقل الطلب: {str(e)}"
+        print(f"{error_msg}\nتفاصيل: {type(e).__name__}: {e}")
+        await call.answer(error_msg, show_alert=True)
 
 # ================= RUN =================
 if __name__ == "__main__":
     print("🚀 البوت يعمل الآن...")
+    print(f"📌 المجموعات:")
+    print(f"   - طلبات جديدة: {GROUP_NEW}")
+    print(f"   - تم التصميم: {GROUP_DESIGN}")
+    print(f"   - مجهز: {GROUP_READY}")
+    print(f"   - تم الإرسال: {GROUP_SENT}")
+    print(f"   - مشاكل: {GROUP_ISSUES}")
     executor.start_polling(dp, skip_updates=True)
