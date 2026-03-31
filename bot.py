@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
@@ -20,8 +21,28 @@ GROUP_READY = -1003312397488
 GROUP_SENT = -1003671523271
 GROUP_ISSUES = -1003747379674
 
+# خريطة الكروبات
+GROUPS_MAP = {
+    "new": GROUP_NEW,
+    "design": GROUP_DESIGN,
+    "ready": GROUP_READY,
+    "sent": GROUP_SENT,
+    "issues": GROUP_ISSUES
+}
+
+GROUPS_NAMES = {
+    GROUP_NEW: "طلبات جديدة",
+    GROUP_DESIGN: "تم التصميم",
+    GROUP_READY: "مجهز",
+    GROUP_SENT: "تم الإرسال",
+    GROUP_ISSUES: "مشاكل"
+}
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
+
+# قاموس لتخزين معلومات الطلبات (تخزين مؤقت في الذاكرة)
+orders_data = {}
 
 # ================= STATES =================
 class OrderState(StatesGroup):
@@ -50,7 +71,6 @@ def get_next_order_id():
     try:
         wb = load_workbook(file)
         ws = wb.active
-        # اجمع جميع الأرقام من العمود الأول (ما عدا الرأس)
         ids = [row[0].value for row in ws.iter_rows(min_row=2, max_col=1) 
                if isinstance(row[0].value, int)]
         return max(ids) + 1 if ids else 1
@@ -97,7 +117,6 @@ def save_to_excel(data):
 def validate_phone(phone: str) -> bool:
     """تحقق من صيغة رقم الهاتف"""
     phone = phone.strip()
-    # قبول أرقام بطول 7-15 رقم
     return bool(re.match(r'^[0-9\+\-\s\(\)]{7,15}$', phone))
 
 def validate_price(price: str) -> bool:
@@ -117,6 +136,64 @@ def validate_dist_count(count: str) -> bool:
         return num > 0
     except ValueError:
         return False
+
+# ================= GENERATE STATUS BUTTONS =================
+def get_status_buttons(order_id: int, current_group: str = "new"):
+    """احصل على أزرار الحالة بناءً على الكروب الحالي"""
+    kb = InlineKeyboardMarkup(row_width=2)
+    
+    if current_group != "new":
+        kb.insert(InlineKeyboardButton("⬅️ طلبات جديدة", callback_data=f"move_{order_id}_new"))
+    
+    if current_group != "design":
+        kb.insert(InlineKeyboardButton("✏️ تم التصميم", callback_data=f"move_{order_id}_design"))
+    
+    if current_group != "ready":
+        kb.insert(InlineKeyboardButton("📦 مجهز", callback_data=f"move_{order_id}_ready"))
+    
+    if current_group != "sent":
+        kb.insert(InlineKeyboardButton("✈️ تم الإرسال", callback_data=f"move_{order_id}_sent"))
+    
+    if current_group != "issues":
+        kb.insert(InlineKeyboardButton("⚠️ مشاكل", callback_data=f"move_{order_id}_issues"))
+    
+    return kb
+
+# ================= FORMAT ORDER TEXT =================
+def format_order_text(data: dict, order_id: int, current_group: str = "new") -> str:
+    """نسق نص الطلب"""
+    over = data.get("over_type", "لا يوجد")
+    hand = data.get("hand_type", "لا يوجد")
+    box = data.get("box_color", "لا يوجد")
+    dist = data.get("dist_count", "لا يوجد")
+
+    group_display = GROUPS_NAMES.get(GROUPS_MAP.get(current_group), "غير معروف")
+
+    text = f"""
+📦 *طلب #{order_id}*
+
+👤 *الاسم:* {data['name']}
+📞 *الهاتف:* {data['phone']}
+📍 *المدينة - المنطقة:* {data['city']} - {data['area']}
+
+🧵 *النوع:* {data['order_type']}
+👕 *القطع:* {', '.join(data['pieces'])}
+
+👗 *الأوفر:* {over}
+🛏 *الملحف:* {hand}
+🎁 *لون البوكس:* {box}
+🎉 *عدد التوزيعات:* {dist}
+
+📏 *القياس:* {data['size']}
+💰 *السعر:* {data['price']} ر.س
+
+📝 *الملاحظات:*
+{data['notes']}
+
+━━━━━━━━━━━━━━━━━━
+📍 *الحالة الحالية:* {group_display}
+"""
+    return text
 
 # ================= START =================
 @dp.message_handler(commands=['start'])
@@ -249,7 +326,6 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
 
-    # 🔹 اسأل عن الأوفر
     if need_over:
         kb = InlineKeyboardMarkup(row_width=2).add(
             InlineKeyboardButton("🎀 دانتيل", callback_data="over_دانتيل"),
@@ -261,7 +337,6 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         await OrderState.over_type.set()
         return
 
-    # 🔹 اسأل عن الملحف
     if need_hand:
         kb = InlineKeyboardMarkup(row_width=2).add(
             InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
@@ -271,19 +346,16 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         await OrderState.hand_type.set()
         return
 
-    # 🔹 اسأل عن لون البوكس
     if need_box:
         await ask_box(call.message)
         await OrderState.box_color.set()
         return
 
-    # 🔹 اسأل عن عدد التوزيعات
     if need_dist:
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
 
-    # لا توجد أسئلة مشروطة، انتقل للقياس
     await ask_size(call.message)
     await OrderState.size.set()
 
@@ -296,7 +368,6 @@ async def choose_over(call: types.CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     
-    # انتقل للسؤال التالي
     if data.get("need_hand"):
         kb = InlineKeyboardMarkup(row_width=2).add(
             InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
@@ -448,99 +519,92 @@ async def finish_order(msg: types.Message, state: FSMContext):
     """إنهاء الطلب وإرساله"""
     order_id = get_next_order_id()
     data = await state.get_data()
-    
-    over = data.get("over_type", "لا يوجد")
-    hand = data.get("hand_type", "لا يوجد")
-    box = data.get("box_color", "لا يوجد")
-    dist = data.get("dist_count", "لا يوجد")
     images_list = data.get("images", [])
 
-    # نص الطلب
-    text = f"""
-📦 *طلب #{order_id}*
-
-👤 *الاسم:* {data['name']}
-📞 *الهاتف:* {data['phone']}
-📍 *المدينة - المنطقة:* {data['city']} - {data['area']}
-
-🧵 *النوع:* {data['order_type']}
-👕 *القطع:* {', '.join(data['pieces'])}
-
-👗 *الأوفر:* {over}
-🛏 *الملحف:* {hand}
-🎁 *لون البوكس:* {box}
-🎉 *عدد التوزيعات:* {dist}
-
-📏 *القياس:* {data['size']}
-💰 *السعر:* {data['price']} ر.س
-
-📝 *الملاحظات:*
-{data['notes']}
-
-━━━━━━━━━━━━━━━━━━
-⏳ *الحالة: جديد*
-"""
-
-    # أزرار تغيير الحالة
-    status_kb = InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("✏️ تم التصميم", callback_data="status_design"),
-        InlineKeyboardButton("📦 مجهز", callback_data="status_ready"),
-        InlineKeyboardButton("✈️ تم الإرسال", callback_data="status_sent"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="status_issues")
-    )
-
-    # إرسال الصور أولاً إذا كانت موجودة
-    if images_list:
-        media = [InputMediaPhoto(media=i) for i in images_list]
-        await bot.send_media_group(GROUP_NEW, media)
-        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb, parse_mode='Markdown')
-    else:
-        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb, parse_mode='Markdown')
+    # احفظ بيانات الطلب في الذاكرة
+    orders_data[order_id] = {
+        "data": data,
+        "images": images_list,
+        "current_group": "new"
+    }
 
     # احفظ في الإكسل
-    await msg.answer("✅ تم إنشاء الطلب بنجاح!")
     await save_to_excel({**data, "id": order_id})
+
+    # نسق نص الطلب
+    text = format_order_text(data, order_id, "new")
+    
+    # أزرار الحالة
+    status_kb = get_status_buttons(order_id, "new")
+
+    # إرسال الصور أولاً إذا كانت موجودة
+    try:
+        if images_list:
+            media = [InputMediaPhoto(media=i) for i in images_list]
+            await bot.send_media_group(GROUP_NEW, media)
+        
+        # إرسال نص الطلب مع الأزرار
+        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb, parse_mode='Markdown')
+        await msg.answer("✅ تم إنشاء الطلب بنجاح!")
+    
+    except Exception as e:
+        await msg.answer(f"❌ خطأ: {str(e)}")
+        print(f"❌ خطأ في إرسال الطلب: {e}")
+
     await state.finish()
 
-# ================= CHANGE STATUS =================
-status_groups = {
-    "status_design": (GROUP_DESIGN, "✏️ تم التصميم"),
-    "status_ready": (GROUP_READY, "📦 مجهز"),
-    "status_sent": (GROUP_SENT, "✈️ تم الإرسال"),
-    "status_issues": (GROUP_ISSUES, "⚠️ مشاكل")
-}
-
-@dp.callback_query_handler(lambda c: c.data.startswith("status_"))
-async def change_status(call: types.CallbackQuery):
-    """غير حالة الطلب"""
-    target_group, status_name = status_groups.get(call.data, (None, None))
-    
-    if not target_group:
-        await call.answer("❌ خطأ في الحالة المختارة!", show_alert=True)
-        return
-
+# ================= CHANGE STATUS / MOVE ORDER =================
+@dp.callback_query_handler(lambda c: c.data.startswith("move_"))
+async def move_order(call: types.CallbackQuery):
+    """انقل الطلب إلى كروب آخر"""
     try:
-        # انسخ الرسالة مع الأزرار
-        await bot.copy_message(
-            chat_id=target_group, 
-            from_chat_id=call.message.chat.id, 
-            message_id=call.message.message_id
-        )
+        parts = call.data.split("_")
+        order_id = int(parts[1])
+        target_group_name = parts[2]
 
-        # إذا كانت هناك مجموعة وسائط، انسخ كل الصور
-        if call.message.media_group_id:
-            # نسخ كل الرسائل في المجموعة
-            await bot.copy_message(
-                chat_id=target_group,
-                from_chat_id=call.message.chat.id,
-                message_id=call.message.message_id
-            )
+        # تحقق من وجود الطلب
+        if order_id not in orders_data:
+            await call.answer("❌ لم أستطع العثور على بيانات الطلب!", show_alert=True)
+            return
 
-        # احذف الرسالة من المجموعة السابقة
-        await call.message.delete()
+        order_info = orders_data[order_id]
+        data = order_info["data"]
+        images_list = order_info["images"]
+        current_group = order_info["current_group"]
+
+        # تحقق من أن الكروب الجديد مختلف عن الحالي
+        if current_group == target_group_name:
+            await call.answer("🔔 الطلب موجود بالفعل هنا!", show_alert=True)
+            return
+
+        # احصل على معرف الكروب الجديد
+        target_group_id = GROUPS_MAP.get(target_group_name)
+        if not target_group_id:
+            await call.answer("❌ خطأ في الكروب المستهدف!", show_alert=True)
+            return
+
+        # نسق نص الطلب
+        text = format_order_text(data, order_id, target_group_name)
+        status_kb = get_status_buttons(order_id, target_group_name)
+
+        # أرسل الصور والنص في الكروب الجديد
+        if images_list:
+            media = [InputMediaPhoto(media=i) for i in images_list]
+            await bot.send_media_group(target_group_id, media)
         
-        await call.answer(f"✅ تم نقل الطلب إلى {status_name}", show_alert=False)
-    
+        await bot.send_message(target_group_id, text, reply_markup=status_kb, parse_mode='Markdown')
+
+        # احذف الرسالة من الكروب السابق
+        await call.message.delete()
+
+        # حدّث معلومات الطلب
+        orders_data[order_id]["current_group"] = target_group_name
+
+        target_group_display = GROUPS_NAMES.get(target_group_id, "غير معروف")
+        await call.answer(f"✅ تم نقل الطلب إلى {target_group_display}", show_alert=False)
+
+    except ValueError:
+        await call.answer("❌ خطأ في معالجة الطلب!", show_alert=True)
     except Exception as e:
         print(f"❌ خطأ في نقل الطلب: {e}")
         await call.answer(f"❌ خطأ: {str(e)}", show_alert=True)
