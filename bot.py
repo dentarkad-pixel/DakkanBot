@@ -495,7 +495,7 @@ async def get_notes(msg: types.Message, state: FSMContext):
     """احصل على الملاحظات"""
     notes = "لا يوجد" if msg.text.strip().lower() in ["لا", "لايوجد", "ليس"] else msg.text.strip()
     await state.update_data(notes=notes)
-    await msg.answer("📸 ارسل الصور (1-4 صور) ثم اكتب 'تم'")
+    await msg.answer("📸 ارسل الصور (1-4 صور) ثم اكتب 'تم'\n\n💡 يمكنك تخطي هذه الخطوة بكتابة 'تم' مباشرة بدون صور")
     await state.update_data(images=[])
     await OrderState.images.set()
 
@@ -512,11 +512,18 @@ async def get_images(msg: types.Message, state: FSMContext):
     
     images.append(msg.photo[-1].file_id)
     await state.update_data(images=images)
-    await msg.answer(f"✅ تم حفظ الصورة ({len(images)}/4)")
+    await msg.answer(f"✅ تم حفظ الصورة ({len(images)}/4)\n\n💡 اكتب 'تم' لإنهاء الطلب")
 
-@dp.message_handler(lambda m: m.text.strip().lower() in ["تم", "done"], state=OrderState.images)
+@dp.message_handler(state=OrderState.images)
 async def finish_order(msg: types.Message, state: FSMContext):
-    """إنهاء الطلب وإرساله"""
+    """إنهاء الطلب وإرساله - معالج لأي رسالة نصية في حالة الصور"""
+    text_input = msg.text.strip().lower()
+    
+    # التحقق من أن الرسالة تحتوي على كلمة "تم"
+    if "تم" not in text_input and text_input != "done":
+        await msg.answer("❌ اكتب 'تم' لإنهاء الطلب أو أرسل صورة (1-4)")
+        return
+    
     order_id = get_next_order_id()
     data = await state.get_data()
     images_list = data.get("images", [])
