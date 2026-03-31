@@ -74,6 +74,7 @@ async def new_order(msg: types.Message):
     await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
 
+# ================= جمع المعلومات =================
 @dp.message_handler(state=OrderState.name)
 async def get_name(msg: types.Message, state: FSMContext):
     await state.update_data(name=msg.text)
@@ -355,8 +356,7 @@ async def finish(msg: types.Message, state: FSMContext):
     # إرسال للـ GROUP_NEW
     if images_list:
         media = [InputMediaPhoto(media=i) for i in images_list]
-        msg_sent = await bot.send_media_group(GROUP_NEW, media)
-        # إرسال نص بعد الصور مع أزرار الحالة
+        await bot.send_media_group(GROUP_NEW, media)
         await bot.send_message(GROUP_NEW, text, reply_markup=status_kb)
     else:
         await bot.send_message(GROUP_NEW, text, reply_markup=status_kb)
