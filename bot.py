@@ -7,6 +7,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from openpyxl import Workbook, load_workbook
 
+# ================= TOKEN & GROUPS =================
 API_TOKEN = os.getenv("BOT_TOKEN")
 
 GROUP_NEW = -1003735668749
@@ -17,7 +18,6 @@ GROUP_ISSUES = -1003747379674
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
-
 order_id = 0
 
 # ================= STATES =================
@@ -56,19 +56,12 @@ def save_to_excel(data):
 
     ws.append([
         data["id"], data["name"], data["phone"],
-        data["city"], data["area"], data["type"],
-        data["pieces"], data["over"], data["hand"],
-        data["box"], data["dist"],
+        data["city"], data["area"], data["order_type"],
+        ",".join(data["pieces"]), data.get("over_type","لا يوجد"), data.get("hand_type","لا يوجد"),
+        data.get("box_color","لا يوجد"), data.get("dist_count","لا يوجد"),
         data["size"], data["price"], data["notes"]
     ])
     wb.save(file)
-
-# ================= HELP =================
-def extract_images(text):
-    if "📸" in text:
-        imgs = text.split("📸")[1].strip()
-        return imgs.split("|") if imgs else []
-    return []
 
 # ================= START =================
 @dp.message_handler(commands=['start'])
@@ -325,8 +318,9 @@ async def finish(msg: types.Message, state: FSMContext):
     hand = data.get("hand_type", "لا يوجد")
     box = data.get("box_color", "لا يوجد")
     dist = data.get("dist_count", "لا يوجد")
-    images_text = "|".join(data.get("images", []))
+    images_list = data.get("images", [])
 
+    # نص الطلب
     text = f"""
 📦 طلب #{order_id}
 
@@ -335,7 +329,7 @@ async def finish(msg: types.Message, state: FSMContext):
 📍 {data['city']} - {data['area']}
 
 🧵 النوع: {data['order_type']}
-👕 القطع: {", ".join(data['pieces'])}
+👕 القطع: {', '.join(data['pieces'])}
 
 👗 الأوفر: {over}
 🛏 الملحف: {hand}
@@ -347,17 +341,50 @@ async def finish(msg: types.Message, state: FSMContext):
 
 📝 {data['notes']}
 
-📸 {images_text}
-
 الحالة: ⏳ جديد
 """
-    await bot.send_message(GROUP_NEW, text)
-    if data.get("images"):
-        media = [InputMediaPhoto(media=i) for i in data["images"]]
-        await bot.send_media_group(GROUP_NEW, media)
 
+    # أزرار تغيير الحالة
+    status_kb = InlineKeyboardMarkup(row_width=2).add(
+        InlineKeyboardButton("تم التصميم", callback_data="status_design"),
+        InlineKeyboardButton("مجهز", callback_data="status_ready"),
+        InlineKeyboardButton("تم الإرسال", callback_data="status_sent"),
+        InlineKeyboardButton("مشاكل", callback_data="status_issues")
+    )
+
+    # إرسال للـ GROUP_NEW
+    if images_list:
+        media = [InputMediaPhoto(media=i) for i in images_list]
+        msg_sent = await bot.send_media_group(GROUP_NEW, media)
+        # إرسال نص بعد الصور مع أزرار الحالة
+        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb)
+    else:
+        await bot.send_message(GROUP_NEW, text, reply_markup=status_kb)
+
+    await save_to_excel({**data, "id": order_id})
     await msg.answer("✅ تم إرسال الطلب")
     await state.finish()
+
+# ================= CHANGE STATUS =================
+status_groups = {
+    "status_design": GROUP_DESIGN,
+    "status_ready": GROUP_READY,
+    "status_sent": GROUP_SENT,
+    "status_issues": GROUP_ISSUES
+}
+
+@dp.callback_query_handler(lambda c: c.data.startswith("status_"))
+async def change_status(call: types.CallbackQuery):
+    target_group = status_groups[call.data]
+
+    # نسخ الرسالة مع كل الصور إذا موجودة
+    if call.message.media_group_id:
+        await bot.copy_message(chat_id=target_group, from_chat_id=call.message.chat.id, message_id=call.message.message_id)
+    else:
+        await bot.copy_message(chat_id=target_group, from_chat_id=call.message.chat.id, message_id=call.message.message_id)
+
+    # حذف الرسالة من الكروب السابق
+    await call.message.delete()
 
 # ================= RUN =================
 if __name__ == "__main__":
