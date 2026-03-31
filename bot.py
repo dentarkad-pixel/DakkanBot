@@ -61,7 +61,6 @@ def save_to_excel(data):
         data["box"], data["dist"],
         data["size"], data["price"], data["notes"]
     ])
-
     wb.save(file)
 
 # ================= HELP =================
@@ -161,6 +160,7 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
 
+    # 🔹 إذا يحتاج الأوفر
     if need_over:
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("دانتيل", callback_data="over_دانتيل"),
@@ -170,39 +170,41 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         )
         await call.message.answer("نوع الأوفر:", reply_markup=kb)
         await OrderState.over_type.set()
+        return
 
-    elif need_hand:
+    # 🔹 إذا يحتاج الملحف
+    if need_hand:
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("كشكش", callback_data="hand_كشكش"),
             InlineKeyboardButton("حب الرمان", callback_data="hand_حب")
         )
         await call.message.answer("نوع الملحف:", reply_markup=kb)
         await OrderState.hand_type.set()
+        return
 
-    elif need_box:
+    # 🔹 إذا يحتاج البوكس
+    if need_box:
         await ask_box(call.message)
         await OrderState.box_color.set()
+        return
 
-    elif need_dist:
+    # 🔹 إذا يحتاج التوزيعات
+    if need_dist:
         await call.message.answer("اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
+        return
 
-    else:
-        await ask_size(call.message)
-        await OrderState.size.set()
+    await ask_size(call.message)
+    await OrderState.size.set()
 
-# ================= OVER FIX =================
+# ================= OVER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("over"), state=OrderState.over_type)
 async def choose_over(call: types.CallbackQuery, state: FSMContext):
     over_choice = call.data.split("_")[1]
     await state.update_data(over_type=over_choice)
 
     data = await state.get_data()
-    need_hand = data.get("need_hand", False)
-    need_box = data.get("need_box", False)
-    need_dist = data.get("need_dist", False)
-
-    if need_hand:
+    if data.get("need_hand"):
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("كشكش", callback_data="hand_كشكش"),
             InlineKeyboardButton("حب الرمان", callback_data="hand_حب")
@@ -210,17 +212,32 @@ async def choose_over(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("🛏 نوع الملحف:", reply_markup=kb)
         await OrderState.hand_type.set()
         return
-
-    if need_box:
+    if data.get("need_box"):
         await ask_box(call.message)
         await OrderState.box_color.set()
         return
-
-    if need_dist:
+    if data.get("need_dist"):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
+    await ask_size(call.message)
+    await OrderState.size.set()
 
+# ================= HAND =================
+@dp.callback_query_handler(lambda c: c.data.startswith("hand"), state=OrderState.hand_type)
+async def choose_hand(call: types.CallbackQuery, state: FSMContext):
+    hand_choice = call.data.split("_")[1]
+    await state.update_data(hand_type=hand_choice)
+
+    data = await state.get_data()
+    if data.get("need_box"):
+        await ask_box(call.message)
+        await OrderState.box_color.set()
+        return
+    if data.get("need_dist"):
+        await call.message.answer("🎉 اكتب عدد التوزيعات:")
+        await OrderState.dist_count.set()
+        return
     await ask_size(call.message)
     await OrderState.size.set()
 
@@ -241,9 +258,9 @@ async def choose_box(call: types.CallbackQuery, state: FSMContext):
     if data.get("need_dist"):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
-    else:
-        await ask_size(call.message)
-        await OrderState.size.set()
+        return
+    await ask_size(call.message)
+    await OrderState.size.set()
 
 # ================= DIST =================
 @dp.message_handler(state=OrderState.dist_count)
@@ -298,44 +315,6 @@ async def get_images(msg: types.Message, state: FSMContext):
     await state.update_data(images=images)
     await msg.answer(f"تم حفظ الصورة ({len(images)}/4)")
 
-# ================= BUTTONS =================
-def new_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🎨 تم التصميم", callback_data="design"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="issues")
-    )
-    return kb
-
-def design_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("📦 جاهز", callback_data="ready"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="issues")
-    )
-    return kb
-
-def ready_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🚚 تم الإرسال", callback_data="sent"),
-        InlineKeyboardButton("⚠️ مشاكل", callback_data="issues")
-    )
-    return kb
-
-def issues_buttons():
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🆕 جديد", callback_data="back_new"),
-        InlineKeyboardButton("🎨 تصميم", callback_data="back_design"),
-    )
-    kb.add(
-        InlineKeyboardButton("📦 جاهز", callback_data="back_ready"),
-        InlineKeyboardButton("🚚 تم الإرسال", callback_data="back_sent"),
-    )
-    return kb
-
-# ================= FINISH =================
 @dp.message_handler(lambda m: m.text == "تم", state=OrderState.images)
 async def finish(msg: types.Message, state: FSMContext):
     global order_id
@@ -372,79 +351,13 @@ async def finish(msg: types.Message, state: FSMContext):
 
 الحالة: ⏳ جديد
 """
-    await bot.send_message(GROUP_NEW, text, reply_markup=new_buttons())
+    await bot.send_message(GROUP_NEW, text)
     if data.get("images"):
         media = [InputMediaPhoto(media=i) for i in data["images"]]
         await bot.send_media_group(GROUP_NEW, media)
 
     await msg.answer("✅ تم إرسال الطلب")
     await state.finish()
-
-# ================= MOVE =================
-async def move_with_images(call, target_group, buttons=None, new_text=None):
-    original_text = call.message.text
-    images = extract_images(original_text)
-    text = new_text if new_text else original_text
-    await bot.send_message(target_group, text, reply_markup=buttons)
-    if images:
-        media = [InputMediaPhoto(media=i) for i in images]
-        await bot.send_media_group(target_group, media)
-    try:
-        await bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
-
-# ================= SENT + EXCEL =================
-@dp.callback_query_handler(lambda c: c.data == "sent")
-async def move_sent(call: types.CallbackQuery):
-    text = call.message.text.replace("جاهز", "🚚 تم الإرسال")
-    lines = text.split("\n")
-    data = {
-        "id": lines[1].replace("📦 طلب #","").strip(),
-        "name": lines[3].replace("👤","").strip(),
-        "phone": lines[4].replace("📞","").strip(),
-        "city": lines[5].split("-")[0].replace("📍","").strip(),
-        "area": lines[5].split("-")[1].strip(),
-        "type": lines[7].replace("🧵 النوع:","").strip(),
-        "pieces": lines[8].replace("👕 القطع:","").strip(),
-        "over": lines[10].replace("👗 الأوفر:","").strip(),
-        "hand": lines[11].replace("🛏 الملحف:","").strip(),
-        "box": lines[12].replace("🎁 لون البوكس:","").strip(),
-        "dist": lines[13].replace("🎉 عدد التوزيعات:","").strip(),
-        "size": lines[15].replace("📏 القياس:","").strip(),
-        "price": lines[16].replace("💰 السعر:","").strip(),
-        "notes": lines[18].replace("📝","").strip(),
-    }
-    save_to_excel(data)
-    await move_with_images(call, GROUP_SENT, None, text)
-
-# ================= OTHER MOVES =================
-@dp.callback_query_handler(lambda c: c.data == "design")
-async def move_design(call: types.CallbackQuery):
-    text = call.message.text.replace("⏳ جديد", "🎨 تم التصميم")
-    await move_with_images(call, GROUP_DESIGN, design_buttons(), text)
-
-@dp.callback_query_handler(lambda c: c.data == "ready")
-async def move_ready(call: types.CallbackQuery):
-    text = call.message.text.replace("تم التصميم", "📦 جاهز")
-    await move_with_images(call, GROUP_READY, ready_buttons(), text)
-
-@dp.callback_query_handler(lambda c: c.data == "issues")
-async def move_issues(call: types.CallbackQuery):
-    text = call.message.text + "\n⚠️ مشكلة"
-    await move_with_images(call, GROUP_ISSUES, issues_buttons(), text)
-
-@dp.callback_query_handler(lambda c: c.data.startswith("back"))
-async def back_from_issues(call: types.CallbackQuery):
-    text = call.message.text.replace("\n⚠️ مشكلة","")
-    if call.data == "back_new":
-        await move_with_images(call, GROUP_NEW, new_buttons(), text)
-    elif call.data == "back_design":
-        await move_with_images(call, GROUP_DESIGN, design_buttons(), text)
-    elif call.data == "back_ready":
-        await move_with_images(call, GROUP_READY, ready_buttons(), text)
-    elif call.data == "back_sent":
-        await move_with_images(call, GROUP_SENT, None, text)
 
 # ================= RUN =================
 if __name__ == "__main__":
