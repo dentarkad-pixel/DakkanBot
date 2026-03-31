@@ -1,6 +1,5 @@
 import os
 import re
-import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
@@ -21,7 +20,6 @@ GROUP_READY = -1003312397488
 GROUP_SENT = -1003671523271
 GROUP_ISSUES = -1003747379674
 
-# خريطة الكروبات
 GROUPS_MAP = {
     "new": GROUP_NEW,
     "design": GROUP_DESIGN,
@@ -41,7 +39,6 @@ GROUPS_NAMES = {
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# قاموس لتخزين معلومات الطلبات
 orders_data = {}
 
 # ================= STATES =================
@@ -63,7 +60,6 @@ class OrderState(StatesGroup):
 
 # ================= EXCEL =================
 def get_next_order_id():
-    """احصل على رقم الطلب التالي من الإكسل"""
     file = "orders.xlsx"
     if not os.path.exists(file):
         return 1
@@ -79,7 +75,6 @@ def get_next_order_id():
         return 1
 
 def save_to_excel(data):
-    """احفظ بيانات الطلب في الإكسل"""
     file = "orders.xlsx"
     if not os.path.exists(file):
         wb = Workbook()
@@ -88,7 +83,7 @@ def save_to_excel(data):
             "رقم الطلب","الاسم","الهاتف","المدينة","المنطقة",
             "النوع","القطع","الأوفر","الملحف",
             "لون البوكس","عدد التوزيعات",
-            "ا��قياس","السعر","ملاحظات"
+            "القياس","السعر","ملاحظات"
         ])
         wb.save(file)
 
@@ -115,12 +110,10 @@ def save_to_excel(data):
 
 # ================= VALIDATION =================
 def validate_phone(phone: str) -> bool:
-    """تحقق من صيغة رقم الهاتف"""
     phone = phone.strip()
     return bool(re.match(r'^[0-9\+\-\s\(\)]{7,15}$', phone))
 
 def validate_price(price: str) -> bool:
-    """تحقق من صيغة السعر"""
     price = price.strip()
     try:
         float(price)
@@ -129,7 +122,6 @@ def validate_price(price: str) -> bool:
         return False
 
 def validate_dist_count(count: str) -> bool:
-    """تحقق من عدد التوزيعات"""
     count = count.strip()
     try:
         num = int(count)
@@ -137,9 +129,8 @@ def validate_dist_count(count: str) -> bool:
     except ValueError:
         return False
 
-# ================= GENERATE STATUS BUTTONS =================
+# ================= HELPER FUNCTIONS =================
 def get_status_buttons(order_id: int, current_group: str = "new"):
-    """احصل على أزرار الحالة بناءً على الكروب الحالي"""
     kb = InlineKeyboardMarkup(row_width=2)
     
     if current_group != "new":
@@ -159,14 +150,11 @@ def get_status_buttons(order_id: int, current_group: str = "new"):
     
     return kb
 
-# ================= FORMAT ORDER TEXT =================
 def format_order_text(data: dict, order_id: int, current_group: str = "new") -> str:
-    """نسق نص الطلب"""
     over = data.get("over_type", "لا يوجد")
     hand = data.get("hand_type", "لا يوجد")
     box = data.get("box_color", "لا يوجد")
     dist = data.get("dist_count", "لا يوجد")
-
     group_display = GROUPS_NAMES.get(GROUPS_MAP.get(current_group), "غير معروف")
 
     text = f"""📦 *طلب #{order_id}*
@@ -193,17 +181,73 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 📍 *الحالة الحالية:* {group_display}"""
     return text
 
+# ================= KEYBOARDS =================
+def order_type_kb():
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("🖨 طباعة", callback_data="type_print"),
+        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb")
+    )
+    return kb
+
+pieces_list = [
+    "سيت 3", "سيت 6", "أوفر", "كلو", "صدرية", 
+    "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
+]
+
+def pieces_kb(selected):
+    kb = InlineKeyboardMarkup(row_width=2)
+    for p in pieces_list:
+        mark = "✅" if p in selected else "☐"
+        kb.insert(InlineKeyboardButton(f"{mark} {p}", callback_data=f"piece_{p}"))
+    kb.add(InlineKeyboardButton("✔️ تم", callback_data="done_pieces"))
+    return kb
+
+def over_type_kb():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🎀 دانتيل", callback_data="over_دانتيل"),
+        InlineKeyboardButton("🧵 طباكات", callback_data="over_طباكات"),
+        InlineKeyboardButton("📄 صفح", callback_data="over_صفح"),
+        InlineKeyboardButton("🎀🧵 دانتيل طباكات", callback_data="over_دانتيل+طباكات")
+    )
+    return kb
+
+def hand_type_kb():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
+        InlineKeyboardButton("🌸 حب الرمان", callback_data="hand_حب الرمان")
+    )
+    return kb
+
+def box_color_kb():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("⚪ أبيض", callback_data="box_أبيض"),
+        InlineKeyboardButton("⚫ رصاصي", callback_data="box_رصاصي"),
+        InlineKeyboardButton("🩷 وردي", callback_data="box_وردي"),
+        InlineKeyboardButton("🩵 سماوي", callback_data="box_سماوي")
+    )
+    return kb
+
+sizes = ["حديثي ولادة", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+
+def size_kb():
+    kb = InlineKeyboardMarkup(row_width=4)
+    for s in sizes:
+        kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
+    return kb
+
 # ================= START =================
 @dp.message_handler(commands=['start'])
 async def start(msg: types.Message, state: FSMContext):
-    """بدء البوت وتصفير أي حالة معلقة"""
     await state.finish()
     await msg.answer("👋 مرحباً! اكتب /new لإنشاء طلب جديد")
 
 # ================= NEW ORDER =================
 @dp.message_handler(commands=['new'])
 async def new_order(msg: types.Message, state: FSMContext):
-    """ابدأ طلب جديد"""
     await state.finish()
     await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
@@ -211,7 +255,6 @@ async def new_order(msg: types.Message, state: FSMContext):
 # ================= COLLECT INFO =================
 @dp.message_handler(state=OrderState.name)
 async def get_name(msg: types.Message, state: FSMContext):
-    """احصل على اسم الزبون"""
     name = msg.text.strip()
     if len(name) < 2:
         await msg.answer("❌ الاسم قصير جداً، حاول مرة أخرى:")
@@ -223,10 +266,9 @@ async def get_name(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.phone)
 async def get_phone(msg: types.Message, state: FSMContext):
-    """احصل على رقم الهاتف مع التحقق"""
     phone = msg.text.strip()
     if not validate_phone(phone):
-        await msg.answer("❌ صيغة الهاتف غير صحيحة. حاول مرة أخرى (مثال: 966501234567):")
+        await msg.answer("❌ صيغة الهاتف غير صحيحة. حاول مرة أخرى:")
         return
     
     await state.update_data(phone=phone)
@@ -235,7 +277,6 @@ async def get_phone(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.city)
 async def get_city(msg: types.Message, state: FSMContext):
-    """احصل على المدينة"""
     city = msg.text.strip()
     if len(city) < 2:
         await msg.answer("❌ اسم المدينة قصير جداً، حاول مرة أخرى:")
@@ -247,7 +288,6 @@ async def get_city(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.area)
 async def get_area(msg: types.Message, state: FSMContext):
-    """احصل على المنطقة واعرض أنواع الطلب"""
     area = msg.text.strip()
     if len(area) < 2:
         await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
@@ -258,42 +298,17 @@ async def get_area(msg: types.Message, state: FSMContext):
     await OrderState.order_type.set()
 
 # ================= ORDER TYPE =================
-def order_type_kb():
-    """لوحة مفاتيح نوع الطلب"""
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton("🖨 طباعة", callback_data="type_print"),
-        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb")
-    )
-    return kb
-
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
 async def choose_type(call: types.CallbackQuery, state: FSMContext):
-    """اختر نوع الطلب"""
     order_type = "طباعة" if call.data == "type_print" else "تطريز"
     await state.update_data(order_type=order_type)
-    await call.message.edit_text("👕 اختر القطع (يمكنك اختيار أكثر من واحد):", reply_markup=pieces_kb([]))
+    await call.message.edit_text("👕 اختر القطع:", reply_markup=pieces_kb([]))
     await state.update_data(pieces=[])
     await OrderState.pieces.set()
 
 # ================= PIECES =================
-pieces_list = [
-    "سيت 3", "سيت 6", "أوفر", "كلو", "صدرية", 
-    "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
-]
-
-def pieces_kb(selected):
-    """لوحة مفاتيح القطع"""
-    kb = InlineKeyboardMarkup(row_width=2)
-    for p in pieces_list:
-        mark = "✅" if p in selected else "☐"
-        kb.insert(InlineKeyboardButton(f"{mark} {p}", callback_data=f"piece_{p}"))
-    kb.add(InlineKeyboardButton("✔️ تم", callback_data="done_pieces"))
-    return kb
-
 @dp.callback_query_handler(lambda c: c.data.startswith("piece_"), state=OrderState.pieces)
 async def choose_pieces(call: types.CallbackQuery, state: FSMContext):
-    """اختر/ألغ القطع"""
     data = await state.get_data()
     selected = data.get("pieces", [])
     piece = call.data.split("piece_", 1)[1]
@@ -306,10 +321,9 @@ async def choose_pieces(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(pieces=selected)
     await call.message.edit_reply_markup(reply_markup=pieces_kb(selected))
 
-# ================= SMART CONDITIONAL LOGIC =================
+# ================= DONE PIECES =================
 @dp.callback_query_handler(lambda c: c.data == "done_pieces", state=OrderState.pieces)
 async def done_pieces(call: types.CallbackQuery, state: FSMContext):
-    """تحقق من الأسئلة المشروطة"""
     data = await state.get_data()
     pieces = data.get("pieces", [])
 
@@ -325,22 +339,12 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
 
     if need_over:
-        kb = InlineKeyboardMarkup(row_width=2).add(
-            InlineKeyboardButton("🎀 دانتيل", callback_data="over_دانتيل"),
-            InlineKeyboardButton("🧵 طباكات", callback_data="over_طباكات"),
-            InlineKeyboardButton("📄 صفح", callback_data="over_صفح"),
-            InlineKeyboardButton("🎀🧵 دانتيل طباكات", callback_data="over_دانتيل+طباكات")
-        )
-        await call.message.answer("✨ نوع الأوفر:", reply_markup=kb)
+        await call.message.answer("✨ نوع الأوفر:", reply_markup=over_type_kb())
         await OrderState.over_type.set()
         return
 
     if need_hand:
-        kb = InlineKeyboardMarkup(row_width=2).add(
-            InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
-            InlineKeyboardButton("🌸 حب الرمان", callback_data="hand_حب الرمان")
-        )
-        await call.message.answer("🛏 نوع الملحف:", reply_markup=kb)
+        await call.message.answer("🛏 نوع الملحف:", reply_markup=hand_type_kb())
         await OrderState.hand_type.set()
         return
 
@@ -354,24 +358,19 @@ async def done_pieces(call: types.CallbackQuery, state: FSMContext):
         await OrderState.dist_count.set()
         return
 
-    await ask_size(call.message)
+    await call.message.answer("📏 اختر القياس:", reply_markup=size_kb())
     await OrderState.size.set()
 
 # ================= OVER TYPE =================
 @dp.callback_query_handler(lambda c: c.data.startswith("over_"), state=OrderState.over_type)
 async def choose_over(call: types.CallbackQuery, state: FSMContext):
-    """اختر نوع الأوفر"""
     over_choice = call.data.split("over_", 1)[1]
     await state.update_data(over_type=over_choice)
 
     data = await state.get_data()
     
     if data.get("need_hand"):
-        kb = InlineKeyboardMarkup(row_width=2).add(
-            InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
-            InlineKeyboardButton("🌸 حب الرمان", callback_data="hand_حب الرمان")
-        )
-        await call.message.answer("🛏 نوع الملحف:", reply_markup=kb)
+        await call.message.answer("🛏 ��وع الملحف:", reply_markup=hand_type_kb())
         await OrderState.hand_type.set()
         return
     
@@ -385,13 +384,12 @@ async def choose_over(call: types.CallbackQuery, state: FSMContext):
         await OrderState.dist_count.set()
         return
     
-    await ask_size(call.message)
+    await call.message.answer("📏 اختر القياس:", reply_markup=size_kb())
     await OrderState.size.set()
 
 # ================= HAND TYPE =================
 @dp.callback_query_handler(lambda c: c.data.startswith("hand_"), state=OrderState.hand_type)
 async def choose_hand(call: types.CallbackQuery, state: FSMContext):
-    """اختر نوع الملحف"""
     hand_choice = call.data.split("hand_", 1)[1]
     await state.update_data(hand_type=hand_choice)
 
@@ -407,23 +405,12 @@ async def choose_hand(call: types.CallbackQuery, state: FSMContext):
         await OrderState.dist_count.set()
         return
     
-    await ask_size(call.message)
+    await call.message.answer("📏 اختر القياس:", reply_markup=size_kb())
     await OrderState.size.set()
 
 # ================= BOX COLOR =================
-def box_color_kb():
-    """لوحة مفاتيح لون البوكس"""
-    kb = InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("⚪ أبيض", callback_data="box_أبيض"),
-        InlineKeyboardButton("⚫ رصاصي", callback_data="box_رصاصي"),
-        InlineKeyboardButton("🩷 وردي", callback_data="box_وردي"),
-        InlineKeyboardButton("🩵 سماوي", callback_data="box_سماوي")
-    )
-    return kb
-
 @dp.callback_query_handler(lambda c: c.data.startswith("box_"), state=OrderState.box_color)
 async def choose_box(call: types.CallbackQuery, state: FSMContext):
-    """اختر لون البوكس"""
     box_color = call.data.split("box_", 1)[1]
     await state.update_data(box_color=box_color)
 
@@ -434,13 +421,12 @@ async def choose_box(call: types.CallbackQuery, state: FSMContext):
         await OrderState.dist_count.set()
         return
     
-    await ask_size(call.message)
+    await call.message.answer("📏 اختر القياس:", reply_markup=size_kb())
     await OrderState.size.set()
 
 # ================= DISTRIBUTION COUNT =================
 @dp.message_handler(state=OrderState.dist_count)
 async def get_dist(msg: types.Message, state: FSMContext):
-    """احصل على عدد التوزيعات مع التحقق"""
     count = msg.text.strip()
     
     if not validate_dist_count(count):
@@ -448,26 +434,12 @@ async def get_dist(msg: types.Message, state: FSMContext):
         return
     
     await state.update_data(dist_count=count)
-    await ask_size(msg)
+    await msg.answer("📏 اختر القياس:", reply_markup=size_kb())
     await OrderState.size.set()
 
 # ================= SIZE =================
-sizes = ["حديثي ولادة", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
-
-def size_kb():
-    """لوحة مفاتيح القياسات"""
-    kb = InlineKeyboardMarkup(row_width=4)
-    for s in sizes:
-        kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
-    return kb
-
-async def ask_size(msg):
-    """اسأل عن القياس"""
-    await msg.answer("📏 اختر القياس:", reply_markup=size_kb())
-
 @dp.callback_query_handler(lambda c: c.data.startswith("size_"), state=OrderState.size)
 async def get_size(call: types.CallbackQuery, state: FSMContext):
-    """اختر القياس"""
     size = call.data.split("size_", 1)[1]
     await state.update_data(size=size)
     await call.message.answer("💰 اكتب سعر الطلب (مثال: 150.50):")
@@ -476,7 +448,6 @@ async def get_size(call: types.CallbackQuery, state: FSMContext):
 # ================= PRICE =================
 @dp.message_handler(state=OrderState.price)
 async def get_price(msg: types.Message, state: FSMContext):
-    """احصل على السعر مع التحقق"""
     price = msg.text.strip()
     
     if not validate_price(price):
@@ -490,17 +461,15 @@ async def get_price(msg: types.Message, state: FSMContext):
 # ================= NOTES =================
 @dp.message_handler(state=OrderState.notes)
 async def get_notes(msg: types.Message, state: FSMContext):
-    """احصل على الملاحظات"""
     notes = "لا يوجد" if msg.text.strip().lower() in ["لا", "لايوجد", "ليس"] else msg.text.strip()
     await state.update_data(notes=notes)
-    await msg.answer("📸 ارسل الصور (1-4 صور) ثم اكتب 'تم'\n\n💡 يمكنك تخطي هذه الخطوة بكتابة 'تم' مباشرة بدون صور")
+    await msg.answer("📸 ارسل الصور (1-4 صور) ثم اكتب 'تم'\n\n💡 أو اكتب 'تم' مباشرة بدون صور")
     await state.update_data(images=[])
     await OrderState.images.set()
 
 # ================= IMAGES =================
 @dp.message_handler(content_types=['photo'], state=OrderState.images)
 async def get_images(msg: types.Message, state: FSMContext):
-    """احصل على الصور"""
     data = await state.get_data()
     images = data.get("images", [])
     
@@ -514,10 +483,8 @@ async def get_images(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.images)
 async def finish_order(msg: types.Message, state: FSMContext):
-    """إنهاء الطلب وإرساله - معالج عام لأي رسالة نصية"""
     text_input = msg.text.strip().lower()
     
-    # التحقق من كلمة "تم"
     if "تم" not in text_input and text_input != "done":
         await msg.answer("❌ اكتب 'تم' لإنهاء الطلب أو أرسل صورة (1-4)")
         return
@@ -527,29 +494,22 @@ async def finish_order(msg: types.Message, state: FSMContext):
         data = await state.get_data()
         images_list = data.get("images", [])
 
-        # احفظ بيانات الطلب في الذاكرة
         orders_data[order_id] = {
             "data": data,
             "images": images_list,
             "current_group": "new"
         }
 
-        # احفظ في الإكسل
         await save_to_excel({**data, "id": order_id})
 
-        # نسق نص الطلب
         text = format_order_text(data, order_id, "new")
-        
-        # أزرار الحالة
         status_kb = get_status_buttons(order_id, "new")
 
-        # إرسال الصور أولاً إذا كانت موجودة
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
             print(f"📸 إرسال {len(images_list)} صور للكروب {GROUP_NEW}")
             await bot.send_media_group(chat_id=GROUP_NEW, media=media)
         
-        # إرسال نص الطلب مع الأزرار
         print(f"📝 إرسال نص الطلب #{order_id} للكروب {GROUP_NEW}")
         msg_result = await bot.send_message(
             chat_id=GROUP_NEW, 
@@ -558,28 +518,25 @@ async def finish_order(msg: types.Message, state: FSMContext):
             parse_mode='Markdown'
         )
         
-        print(f"✅ تم إرسال الطلب #{order_id} بنجاح (Message ID: {msg_result.message_id})")
+        print(f"✅ تم إرسال الطلب #{order_id} بنجاح")
         await msg.answer(f"✅ تم إنشاء الطلب بنجاح!\n\n📌 رقم الطلب: {order_id}")
     
     except Exception as e:
-        error_msg = f"❌ خطأ في الإرسال: {str(e)}"
-        print(f"❌ {error_msg}\nتفاصيل: {type(e).__name__}: {e}")
-        await msg.answer(error_msg)
+        print(f"❌ خطأ في الإرسال: {type(e).__name__}: {e}")
+        await msg.answer(f"❌ خطأ: {str(e)}")
 
     await state.finish()
 
-# ================= CHANGE STATUS / MOVE ORDER =================
+# ================= MOVE ORDER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("move_"))
 async def move_order(call: types.CallbackQuery):
-    """انقل الطلب إلى كروب آخر"""
     try:
         parts = call.data.split("_")
         order_id = int(parts[1])
         target_group_name = parts[2]
 
-        # تحقق من وجود الطلب
         if order_id not in orders_data:
-            await call.answer("❌ لم أستطع العثور على بيانات الطلب!", show_alert=True)
+            await call.answer("❌ لم أستطع العثور على الطلب!", show_alert=True)
             return
 
         order_info = orders_data[order_id]
@@ -587,28 +544,22 @@ async def move_order(call: types.CallbackQuery):
         images_list = order_info["images"]
         current_group = order_info["current_group"]
 
-        # تحقق من أن الكروب الجديد مختلف عن الحالي
         if current_group == target_group_name:
             await call.answer("🔔 الطلب موجود بالفعل هنا!", show_alert=True)
             return
 
-        # احصل على معرف الكروب الجديد
         target_group_id = GROUPS_MAP.get(target_group_name)
         if not target_group_id:
-            await call.answer("❌ خطأ في الكروب المستهدف!", show_alert=True)
+            await call.answer("❌ خطأ في الكروب!", show_alert=True)
             return
 
-        # نسق نص الطلب
         text = format_order_text(data, order_id, target_group_name)
         status_kb = get_status_buttons(order_id, target_group_name)
 
-        # أرسل الصور والنص في الكروب الجديد
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            print(f"📸 نقل {len(images_list)} صور للكروب {target_group_id}")
             await bot.send_media_group(chat_id=target_group_id, media=media)
         
-        print(f"📝 نقل نص الطلب #{order_id} للكروب {target_group_id}")
         await bot.send_message(
             chat_id=target_group_id, 
             text=text, 
@@ -616,30 +567,17 @@ async def move_order(call: types.CallbackQuery):
             parse_mode='Markdown'
         )
 
-        # احذف الرسالة من الكروب السابق
         await call.message.delete()
-
-        # حدّث معلومات الطلب
         orders_data[order_id]["current_group"] = target_group_name
 
         target_group_display = GROUPS_NAMES.get(target_group_id, "غير معروف")
-        await call.answer(f"✅ تم نقل الطلب إلى {target_group_display}", show_alert=False)
+        await call.answer(f"✅ تم النقل إلى {target_group_display}", show_alert=False)
 
-    except ValueError as ve:
-        print(f"❌ خطأ في القيمة: {ve}")
-        await call.answer("❌ خطأ في معالجة الطلب!", show_alert=True)
     except Exception as e:
-        error_msg = f"❌ خطأ في نقل الطلب: {str(e)}"
-        print(f"{error_msg}\nتفاصيل: {type(e).__name__}: {e}")
-        await call.answer(error_msg, show_alert=True)
+        print(f"❌ خطأ: {type(e).__name__}: {e}")
+        await call.answer(f"❌ خطأ: {str(e)}", show_alert=True)
 
 # ================= RUN =================
 if __name__ == "__main__":
     print("🚀 البوت يعمل الآن...")
-    print(f"📌 المجموعات:")
-    print(f"   - طلبات جديدة: {GROUP_NEW}")
-    print(f"   - تم التصميم: {GROUP_DESIGN}")
-    print(f"   - مجهز: {GROUP_READY}")
-    print(f"   - تم الإرسال: {GROUP_SENT}")
-    print(f"   - مشاكل: {GROUP_ISSUES}")
     executor.start_polling(dp, skip_updates=True)
