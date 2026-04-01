@@ -267,6 +267,35 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     return text
 
 # ================= KEYBOARDS =================
+# قائمة المحافظات العراقية
+cities_list = [
+    "بغداد",
+    "الناصرية - ذي قار",
+    "ديالى",
+    "الكوت - واسط",
+    "كربلاء",
+    "دهوك",
+    "بابل - الحلة",
+    "النجف",
+    "البصرة",
+    "اربيل",
+    "كركوك",
+    "السليمانية",
+    "صلاح الدين",
+    "الانبار",
+    "السماوة - المثنى",
+    "الموصل",
+    "الديوانية",
+    "العمارة - ميسان"
+]
+
+def get_cities_kb() -> InlineKeyboardMarkup:
+    """لوحة مفاتيح المحافظات"""
+    kb = InlineKeyboardMarkup(row_width=2)
+    for city in cities_list:
+        kb.insert(InlineKeyboardButton(f"📍 {city}", callback_data=f"city_{city}"))
+    return kb
+
 def get_order_type_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.add(
@@ -365,7 +394,7 @@ async def cmd_download(msg: types.Message):
     
     except Exception as e:
         print(f"❌ خطأ في التحميل: {e}")
-        await msg.answer(f"❌ خطأ: {str(e)}")
+        await msg.answer(f"�� خطأ: {str(e)}")
 
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
@@ -394,17 +423,14 @@ async def process_city(msg: types.Message, state: FSMContext):
         await msg.answer("❌ اسم المدينة قصير جداً، حاول مرة أخرى:")
         return
     await state.update_data(city=city)
-    await msg.answer("🏘 المنطقة:")
+    await msg.answer("🏘 اختر المحافظة:", reply_markup=get_cities_kb())
     await OrderState.area.set()
 
-@dp.message_handler(state=OrderState.area)
-async def process_area(msg: types.Message, state: FSMContext):
-    area = msg.text.strip()
-    if len(area) < 2:
-        await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
-        return
+@dp.callback_query_handler(lambda c: c.data.startswith("city_"), state=OrderState.area)
+async def process_area(call: types.CallbackQuery, state: FSMContext):
+    area = call.data.replace("city_", "")
     await state.update_data(area=area)
-    await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await call.message.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
     await OrderState.order_type.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
@@ -632,7 +658,13 @@ async def move_order(call: types.CallbackQuery):
             parse_mode='Markdown'
         )
 
-        await call.message.delete()
+        # ✅ حذف الطلب مع الصور من الكروب السابق
+        try:
+            await call.message.delete()
+            print(f"✅ تم حذف الرسالة والصور من الكروب السابق")
+        except Exception as e:
+            print(f"⚠️ لم يتمكن من حذف الرسالة: {e}")
+        
         orders_data[order_id]["current_group"] = target_group_name
 
         target_name = GROUPS_NAMES.get(target_group_id)
