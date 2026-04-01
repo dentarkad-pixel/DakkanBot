@@ -74,9 +74,9 @@ def get_next_order_id():
         print(f"❌ خطأ في قراءة الإكسل: {e}")
         return 1
 
-def save_to_excel(data):
-    file = "orders.xlsx"
-    if not os.path.exists(file):
+def init_excel_file(file_name: str):
+    """إنشاء ملف Excel إذا كان غير موجود"""
+    if not os.path.exists(file_name):
         wb = Workbook()
         ws = wb.active
         ws.append([
@@ -85,10 +85,14 @@ def save_to_excel(data):
             "لون البوكس","عدد التوزيعات",
             "القياس","السعر","ملاحظات"
         ])
-        wb.save(file)
+        wb.save(file_name)
 
+def save_to_excel(data, file_name="orders.xlsx"):
+    """احفظ الطلب في ملف Excel"""
+    init_excel_file(file_name)
+    
     try:
-        wb = load_workbook(file)
+        wb = load_workbook(file_name)
         ws = wb.active
         ws.append([
             data["id"], 
@@ -106,9 +110,29 @@ def save_to_excel(data):
             data["price"], 
             data["notes"]
         ])
-        wb.save(file)
+        wb.save(file_name)
+        print(f"✅ تم حفظ الطلب #{data['id']} في {file_name}")
     except Exception as e:
         print(f"❌ خطأ في حفظ الإكسل: {e}")
+
+def remove_from_excel(order_id: int, file_name: str):
+    """حذف الطلب من ملف Excel"""
+    if not os.path.exists(file_name):
+        return
+    
+    try:
+        wb = load_workbook(file_name)
+        ws = wb.active
+        
+        for row in range(2, ws.max_row + 1):
+            if ws[f'A{row}'].value == order_id:
+                ws.delete_rows(row, 1)
+                break
+        
+        wb.save(file_name)
+        print(f"✅ تم حذف الطلب #{order_id} من {file_name}")
+    except Exception as e:
+        print(f"❌ خطأ في حذف من الإكسل: {e}")
 
 # ================= VALIDATION FUNCTIONS =================
 def validate_phone(phone: str) -> bool:
@@ -124,7 +148,7 @@ def validate_price(price: str) -> bool:
         return False
 
 def validate_dist_count(count: str) -> bool:
-    count = msg.text.strip()
+    count = count.strip()
     try:
         return int(count) > 0
     except:
@@ -489,7 +513,8 @@ async def finish_order(msg: types.Message, state: FSMContext):
             "current_group": "new"
         }
 
-        save_to_excel({**data, "id": order_id})
+        # احفظ في ملف Excel العام
+        save_to_excel({**data, "id": order_id}, "orders.xlsx")
 
         text = format_order_text(data, order_id, "new")
         status_kb = get_status_buttons(order_id, "new")
@@ -548,6 +573,13 @@ async def move_order(call: types.CallbackQuery):
         )
 
         await call.message.delete()
+        
+        # إذا نقلت إلى "ready"، احفظ في ملف Excel خاص
+        if target_group_name == "ready":
+            save_to_excel({**data, "id": order_id}, "orders_ready.xlsx")
+            print(f"📊 تم حفظ الطلب #{order_id} في ملف مجهز!")
+        
+        # حدّث معلومات الطلب
         orders_data[order_id]["current_group"] = target_group_name
 
         target_name = GROUPS_NAMES.get(target_group_id)
