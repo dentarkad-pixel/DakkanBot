@@ -7,6 +7,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from openpyxl import Workbook, load_workbook
+from datetime import datetime
 
 # ================= TOKEN & GROUPS =================
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -58,57 +59,88 @@ class OrderState(StatesGroup):
     images = State()
 
 # ================= EXCEL FUNCTIONS =================
-def get_next_order_id():
-    file = "orders.xlsx"
-    if not os.path.exists(file):
-        return 1
-    
+def init_excel_file(file_name: str = "orders.xlsx"):
+    """إنشاء ملف Excel إذا كان غير موجود"""
     try:
-        wb = load_workbook(file)
+        if not os.path.exists(file_name):
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Orders"
+            ws.append([
+                "رقم الطلب",
+                "الاسم",
+                "الهاتف",
+                "المدينة",
+                "المنطقة",
+                "النوع",
+                "القطع",
+                "الأوفر",
+                "الملحف",
+                "لون البوكس",
+                "عدد التوزيعات",
+                "القياس",
+                "السعر",
+                "ملاحظات",
+                "التاريخ"
+            ])
+            wb.save(file_name)
+            print(f"✅ تم إنشاء الملف: {file_name}")
+        else:
+            print(f"✅ الملف موجود: {file_name}")
+    except Exception as e:
+        print(f"❌ خطأ في إنشاء الملف: {e}")
+
+def get_next_order_id(file_name: str = "orders.xlsx"):
+    """احصل على رقم الطلب التالي"""
+    try:
+        if not os.path.exists(file_name):
+            return 1
+        
+        wb = load_workbook(file_name)
         ws = wb.active
-        ids = [row[0].value for row in ws.iter_rows(min_row=2, max_col=1) 
-               if isinstance(row[0].value, int)]
+        ids = []
+        for row in ws.iter_rows(min_row=2, max_col=1):
+            if row[0].value and isinstance(row[0].value, int):
+                ids.append(row[0].value)
+        
         return max(ids) + 1 if ids else 1
     except Exception as e:
         print(f"❌ خطأ في قراءة الإكسل: {e}")
         return 1
 
-def init_excel_file(file_name: str):
-    if not os.path.exists(file_name):
-        wb = Workbook()
-        ws = wb.active
-        ws.append([
-            "رقم الطلب","الاسم","الهاتف","المدينة","المنطقة",
-            "النوع","القطع","الأوفر","الملحف",
-            "لون البوكس","عدد التوزيعات",
-            "القياس","السعر","ملاحظات"
-        ])
-        wb.save(file_name)
-
-def save_to_excel(data, file_name="orders.xlsx"):
-    init_excel_file(file_name)
-    
+def save_to_excel(data, file_name: str = "orders.xlsx"):
+    """احفظ الطلب في ملف Excel"""
     try:
+        # تأكد من وجود الملف
+        init_excel_file(file_name)
+        
+        # احمل الملف
         wb = load_workbook(file_name)
         ws = wb.active
+        
+        # أضف البيانات
         ws.append([
-            data["id"], 
-            data["name"], 
-            data["phone"],
-            data["city"], 
-            data["area"], 
-            data["order_type"],
-            ",".join(data["pieces"]), 
-            data.get("over_type", "لا يوجد"), 
+            data.get("id"),
+            data.get("name"),
+            data.get("phone"),
+            data.get("city"),
+            data.get("area"),
+            data.get("order_type"),
+            ",".join(data.get("pieces", [])),
+            data.get("over_type", "لا يوجد"),
             data.get("hand_type", "لا يوجد"),
-            data.get("box_color", "لا يوجد"), 
+            data.get("box_color", "لا يوجد"),
             data.get("dist_count", "لا يوجد"),
-            data["size"], 
-            data["price"], 
-            data["notes"]
+            data.get("size"),
+            data.get("price"),
+            data.get("notes"),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ])
+        
+        # احفظ الملف
         wb.save(file_name)
         print(f"✅ تم حفظ الطلب #{data['id']} في {file_name}")
+        
     except Exception as e:
         print(f"❌ خطأ في حفظ الإكسل: {e}")
 
@@ -245,21 +277,17 @@ def get_size_kb() -> InlineKeyboardMarkup:
 # ================= HANDLERS =================
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
-    print(f"✅ /start من {msg.from_user.id}")
     await state.finish()
     await msg.answer("👋 مرحباً!\n\n/new - إنشاء طلب جديد\n/download - تحميل ملف مجهز")
 
 @dp.message_handler(commands=['new'])
 async def cmd_new(msg: types.Message, state: FSMContext):
-    print(f"✅ /new من {msg.from_user.id}")
     await state.finish()
     await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
 
 @dp.message_handler(commands=['download'])
 async def cmd_download(msg: types.Message):
-    """تحميل ملف Excel للطلبات المجهزة"""
-    print(f"✅ /download من {msg.from_user.id}")
     file_path = "orders_ready.xlsx"
     
     if not os.path.exists(file_path):
@@ -278,265 +306,196 @@ async def cmd_download(msg: types.Message):
         print(f"❌ خطأ في إرسال الملف: {e}")
         await msg.answer(f"❌ خطأ: {str(e)}")
 
-# ================= NAME HANDLER =================
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
-    print(f"✅ اسم: {msg.text}")
     name = msg.text.strip()
     if len(name) < 2:
         await msg.answer("❌ الاسم قصير جداً، حاول مرة أخرى:")
         return
-    
     await state.update_data(name=name)
     await msg.answer("📞 رقم الهاتف:")
     await OrderState.phone.set()
 
-# ================= PHONE HANDLER =================
 @dp.message_handler(state=OrderState.phone)
 async def process_phone(msg: types.Message, state: FSMContext):
-    print(f"✅ هاتف: {msg.text}")
     phone = msg.text.strip()
     if not validate_phone(phone):
         await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
         return
-    
     await state.update_data(phone=phone)
     await msg.answer("📍 المدينة:")
     await OrderState.city.set()
 
-# ================= CITY HANDLER =================
 @dp.message_handler(state=OrderState.city)
 async def process_city(msg: types.Message, state: FSMContext):
-    print(f"✅ مدينة: {msg.text}")
     city = msg.text.strip()
     if len(city) < 2:
         await msg.answer("❌ اسم المدينة قصير جداً، حاول مرة أخرى:")
         return
-    
     await state.update_data(city=city)
     await msg.answer("🏘 المنطقة:")
     await OrderState.area.set()
 
-# ================= AREA HANDLER =================
 @dp.message_handler(state=OrderState.area)
 async def process_area(msg: types.Message, state: FSMContext):
-    print(f"✅ منطقة: {msg.text}")
     area = msg.text.strip()
     if len(area) < 2:
         await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
         return
-    
     await state.update_data(area=area)
-    await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await msg.answer("��� اختر نوع الطلب:", reply_markup=get_order_type_kb())
     await OrderState.order_type.set()
 
-# ================= ORDER TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
 async def process_order_type(call: types.CallbackQuery, state: FSMContext):
-    print(f"✅ نوع: {call.data}")
     order_type = "طباعة" if call.data == "type_print" else "تطريز"
     await state.update_data(order_type=order_type)
     await call.message.edit_text("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
     await state.update_data(pieces=[])
     await OrderState.pieces.set()
 
-# ================= PIECES HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("piece_"), state=OrderState.pieces)
 async def process_pieces(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = data.get("pieces", [])
     piece = call.data.replace("piece_", "")
-    print(f"✅ قطعة: {piece}")
-
     if piece in selected:
         selected.remove(piece)
     else:
         selected.append(piece)
-
     await state.update_data(pieces=selected)
     await call.message.edit_reply_markup(reply_markup=get_pieces_kb(selected))
 
-# ================= DONE PIECES HANDLER =================
 @dp.callback_query_handler(lambda c: c.data == "done_pieces", state=OrderState.pieces)
 async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
-    print("✅ انتهى اختيار القطع")
     data = await state.get_data()
     pieces = data.get("pieces", [])
-
     if not pieces:
         await call.answer("❌ اختر قطعة واحدة على الأقل!", show_alert=True)
         return
-
     need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 6"])
     need_hand = any(p in pieces for p in ["ملحف", "سيت 3", "سيت 6"])
     need_box = "بوكس ككو" in pieces
     need_dist = "توزيعات" in pieces
-
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
-
     if need_over:
-        print("➡️ اسأل عن الأوفر")
         await call.message.answer("✨ نوع الأوفر:", reply_markup=get_over_type_kb())
         await OrderState.over_type.set()
         return
-
     if need_hand:
-        print("➡️ اسأل عن الملحف")
         await call.message.answer("🛏 نوع الملحف:", reply_markup=get_hand_type_kb())
         await OrderState.hand_type.set()
         return
-
     if need_box:
-        print("➡️ اسأل عن لون البوكس")
         await call.message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
         await OrderState.box_color.set()
         return
-
     if need_dist:
-        print("➡️ اسأل عن التوزيعات")
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
-
-    print("➡️ اسأل عن القياس")
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
-# ================= OVER TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("over_"), state=OrderState.over_type)
 async def process_over_type(call: types.CallbackQuery, state: FSMContext):
-    print(f"✅ أوفر: {call.data}")
     over_choice = call.data.replace("over_", "")
     await state.update_data(over_type=over_choice)
-
     data = await state.get_data()
-    
     if data.get("need_hand"):
         await call.message.answer("🛏 نوع الملحف:", reply_markup=get_hand_type_kb())
         await OrderState.hand_type.set()
         return
-    
     if data.get("need_box"):
         await call.message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
         await OrderState.box_color.set()
         return
-    
     if data.get("need_dist"):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
-    
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
-# ================= HAND TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("hand_"), state=OrderState.hand_type)
 async def process_hand_type(call: types.CallbackQuery, state: FSMContext):
-    print(f"✅ ملحف: {call.data}")
     hand_choice = call.data.replace("hand_", "")
     await state.update_data(hand_type=hand_choice)
-
     data = await state.get_data()
-    
     if data.get("need_box"):
         await call.message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
         await OrderState.box_color.set()
         return
-    
     if data.get("need_dist"):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
-    
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
-# ================= BOX COLOR HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("box_"), state=OrderState.box_color)
 async def process_box_color(call: types.CallbackQuery, state: FSMContext):
-    print(f"✅ لون: {call.data}")
     box_color = call.data.replace("box_", "")
     await state.update_data(box_color=box_color)
-
     data = await state.get_data()
-    
     if data.get("need_dist"):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
-    
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
-# ================= DIST COUNT HANDLER =================
 @dp.message_handler(state=OrderState.dist_count)
 async def process_dist_count(msg: types.Message, state: FSMContext):
-    print(f"✅ توزيعات: {msg.text}")
     count = msg.text.strip()
-    
     try:
         if int(count) <= 0:
             raise ValueError
     except:
         await msg.answer("❌ أدخل رقماً صحيحاً أكبر من 0:")
         return
-    
     await state.update_data(dist_count=count)
     await msg.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
-# ================= SIZE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("size_"), state=OrderState.size)
 async def process_size(call: types.CallbackQuery, state: FSMContext):
-    print(f"✅ قياس: {call.data}")
     size = call.data.replace("size_", "")
     await state.update_data(size=size)
     await call.message.answer("💰 اكتب سعر الطلب:")
     await OrderState.price.set()
 
-# ================= PRICE HANDLER =================
 @dp.message_handler(state=OrderState.price)
 async def process_price(msg: types.Message, state: FSMContext):
-    print(f"✅ سعر: {msg.text}")
     price = msg.text.strip()
-    
     if not validate_price(price):
         await msg.answer("❌ أدخل سعراً صحيحاً:")
         return
-    
     await state.update_data(price=price)
     await msg.answer("📝 ملاحظات؟ (اكتب 'لا' بدون):")
     await OrderState.notes.set()
 
-# ================= NOTES HANDLER =================
 @dp.message_handler(state=OrderState.notes)
 async def process_notes(msg: types.Message, state: FSMContext):
-    print(f"✅ ملاحظات: {msg.text}")
     notes = "لا يوجد" if msg.text.strip().lower() in ["لا", "لايوجد"] else msg.text.strip()
     await state.update_data(notes=notes)
     await msg.answer("📸 ارسل الصور (1-4) أو اكتب 'تم':")
     await state.update_data(images=[])
     await OrderState.images.set()
 
-# ================= PHOTO HANDLER =================
 @dp.message_handler(content_types=['photo'], state=OrderState.images)
 async def process_photo(msg: types.Message, state: FSMContext):
-    print("✅ صورة مستلمة")
     data = await state.get_data()
     images = data.get("images", [])
-    
     if len(images) >= 4:
         await msg.answer("❌ الحد الأقصى 4 صور!")
         return
-    
     images.append(msg.photo[-1].file_id)
     await state.update_data(images=images)
     await msg.answer(f"✅ صورة ({len(images)}/4)")
 
-# ================= FINISH ORDER HANDLER =================
 @dp.message_handler(state=OrderState.images)
 async def finish_order(msg: types.Message, state: FSMContext):
-    print(f"✅ انتهاء: {msg.text}")
     if "تم" not in msg.text.lower():
         await msg.answer("❌ اكتب 'تم' أو أرسل صورة:")
         return
@@ -546,13 +505,17 @@ async def finish_order(msg: types.Message, state: FSMContext):
         data = await state.get_data()
         images_list = data.get("images", [])
 
+        # إضف رقم الطلب للبيانات
+        data["id"] = order_id
+
         orders_data[order_id] = {
             "data": data,
             "images": images_list,
             "current_group": "new"
         }
 
-        save_to_excel({**data, "id": order_id}, "orders.xlsx")
+        # احفظ في الإكسل
+        save_to_excel(data, "orders.xlsx")
 
         text = format_order_text(data, order_id, "new")
         status_kb = get_status_buttons(order_id, "new")
@@ -576,7 +539,6 @@ async def finish_order(msg: types.Message, state: FSMContext):
     finally:
         await state.finish()
 
-# ================= MOVE ORDER HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("move_"))
 async def move_order(call: types.CallbackQuery):
     try:
@@ -615,7 +577,7 @@ async def move_order(call: types.CallbackQuery):
         await call.message.delete()
         
         if target_group_name == "ready":
-            save_to_excel({**data, "id": order_id}, "orders_ready.xlsx")
+            save_to_excel(data, "orders_ready.xlsx")
             print(f"📊 تم حفظ الطلب #{order_id} في ملف مجهز!")
         
         orders_data[order_id]["current_group"] = target_group_name
@@ -629,4 +591,7 @@ async def move_order(call: types.CallbackQuery):
 
 if __name__ == "__main__":
     print("🚀 البوت يعمل...")
+    # تأكد من إنشاء الملفات عند البدء
+    init_excel_file("orders.xlsx")
+    init_excel_file("orders_ready.xlsx")
     executor.start_polling(dp, skip_updates=True)
