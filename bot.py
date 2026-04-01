@@ -118,7 +118,7 @@ def validate_phone(phone: str) -> bool:
     return bool(re.match(r'^[0-9\+\-\s\(\)]{7,15}$', phone))
 
 def validate_price(price: str) -> bool:
-    price = phone.strip()
+    price = price.strip()
     try:
         float(price)
         return True
@@ -245,11 +245,13 @@ def get_size_kb() -> InlineKeyboardMarkup:
 # ================= HANDLERS =================
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
+    print(f"✅ /start من {msg.from_user.id}")
     await state.finish()
-    await msg.answer("👋 مرحباً! اكتب /new لإنشاء طلب جديد أو /download لتحميل الملف")
+    await msg.answer("👋 مرحباً!\n\n/new - إنشاء طلب جديد\n/download - تحميل ملف مجهز")
 
 @dp.message_handler(commands=['new'])
 async def cmd_new(msg: types.Message, state: FSMContext):
+    print(f"✅ /new من {msg.from_user.id}")
     await state.finish()
     await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
@@ -257,6 +259,7 @@ async def cmd_new(msg: types.Message, state: FSMContext):
 @dp.message_handler(commands=['download'])
 async def cmd_download(msg: types.Message):
     """تحميل ملف Excel للطلبات المجهزة"""
+    print(f"✅ /download من {msg.from_user.id}")
     file_path = "orders_ready.xlsx"
     
     if not os.path.exists(file_path):
@@ -275,8 +278,10 @@ async def cmd_download(msg: types.Message):
         print(f"❌ خطأ في إرسال الملف: {e}")
         await msg.answer(f"❌ خطأ: {str(e)}")
 
+# ================= NAME HANDLER =================
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
+    print(f"✅ اسم: {msg.text}")
     name = msg.text.strip()
     if len(name) < 2:
         await msg.answer("❌ الاسم قصير جداً، حاول مرة أخرى:")
@@ -286,8 +291,10 @@ async def process_name(msg: types.Message, state: FSMContext):
     await msg.answer("📞 رقم الهاتف:")
     await OrderState.phone.set()
 
+# ================= PHONE HANDLER =================
 @dp.message_handler(state=OrderState.phone)
 async def process_phone(msg: types.Message, state: FSMContext):
+    print(f"✅ هاتف: {msg.text}")
     phone = msg.text.strip()
     if not validate_phone(phone):
         await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
@@ -297,8 +304,10 @@ async def process_phone(msg: types.Message, state: FSMContext):
     await msg.answer("📍 المدينة:")
     await OrderState.city.set()
 
+# ================= CITY HANDLER =================
 @dp.message_handler(state=OrderState.city)
 async def process_city(msg: types.Message, state: FSMContext):
+    print(f"✅ مدينة: {msg.text}")
     city = msg.text.strip()
     if len(city) < 2:
         await msg.answer("❌ اسم المدينة قصير جداً، حاول مرة أخرى:")
@@ -308,8 +317,10 @@ async def process_city(msg: types.Message, state: FSMContext):
     await msg.answer("🏘 المنطقة:")
     await OrderState.area.set()
 
+# ================= AREA HANDLER =================
 @dp.message_handler(state=OrderState.area)
 async def process_area(msg: types.Message, state: FSMContext):
+    print(f"✅ منطقة: {msg.text}")
     area = msg.text.strip()
     if len(area) < 2:
         await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
@@ -319,19 +330,23 @@ async def process_area(msg: types.Message, state: FSMContext):
     await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
     await OrderState.order_type.set()
 
+# ================= ORDER TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
 async def process_order_type(call: types.CallbackQuery, state: FSMContext):
+    print(f"✅ نوع: {call.data}")
     order_type = "طباعة" if call.data == "type_print" else "تطريز"
     await state.update_data(order_type=order_type)
     await call.message.edit_text("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
     await state.update_data(pieces=[])
     await OrderState.pieces.set()
 
+# ================= PIECES HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("piece_"), state=OrderState.pieces)
 async def process_pieces(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = data.get("pieces", [])
     piece = call.data.replace("piece_", "")
+    print(f"✅ قطعة: {piece}")
 
     if piece in selected:
         selected.remove(piece)
@@ -341,8 +356,10 @@ async def process_pieces(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(pieces=selected)
     await call.message.edit_reply_markup(reply_markup=get_pieces_kb(selected))
 
+# ================= DONE PIECES HANDLER =================
 @dp.callback_query_handler(lambda c: c.data == "done_pieces", state=OrderState.pieces)
 async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
+    print("✅ انتهى اختيار القطع")
     data = await state.get_data()
     pieces = data.get("pieces", [])
 
@@ -358,30 +375,37 @@ async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
 
     if need_over:
+        print("➡️ اسأل عن الأوفر")
         await call.message.answer("✨ نوع الأوفر:", reply_markup=get_over_type_kb())
         await OrderState.over_type.set()
         return
 
     if need_hand:
+        print("➡️ اسأل عن الملحف")
         await call.message.answer("🛏 نوع الملحف:", reply_markup=get_hand_type_kb())
         await OrderState.hand_type.set()
         return
 
     if need_box:
+        print("➡️ اسأل عن لون البوكس")
         await call.message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
         await OrderState.box_color.set()
         return
 
     if need_dist:
+        print("➡️ اسأل عن التوزيعات")
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
 
+    print("➡️ اسأل عن القياس")
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
+# ================= OVER TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("over_"), state=OrderState.over_type)
 async def process_over_type(call: types.CallbackQuery, state: FSMContext):
+    print(f"✅ أوفر: {call.data}")
     over_choice = call.data.replace("over_", "")
     await state.update_data(over_type=over_choice)
 
@@ -405,8 +429,10 @@ async def process_over_type(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
+# ================= HAND TYPE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("hand_"), state=OrderState.hand_type)
 async def process_hand_type(call: types.CallbackQuery, state: FSMContext):
+    print(f"✅ ملحف: {call.data}")
     hand_choice = call.data.replace("hand_", "")
     await state.update_data(hand_type=hand_choice)
 
@@ -425,8 +451,10 @@ async def process_hand_type(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
+# ================= BOX COLOR HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("box_"), state=OrderState.box_color)
 async def process_box_color(call: types.CallbackQuery, state: FSMContext):
+    print(f"✅ لون: {call.data}")
     box_color = call.data.replace("box_", "")
     await state.update_data(box_color=box_color)
 
@@ -440,8 +468,10 @@ async def process_box_color(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
+# ================= DIST COUNT HANDLER =================
 @dp.message_handler(state=OrderState.dist_count)
 async def process_dist_count(msg: types.Message, state: FSMContext):
+    print(f"✅ توزيعات: {msg.text}")
     count = msg.text.strip()
     
     try:
@@ -455,15 +485,19 @@ async def process_dist_count(msg: types.Message, state: FSMContext):
     await msg.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
+# ================= SIZE HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("size_"), state=OrderState.size)
 async def process_size(call: types.CallbackQuery, state: FSMContext):
+    print(f"✅ قياس: {call.data}")
     size = call.data.replace("size_", "")
     await state.update_data(size=size)
     await call.message.answer("💰 اكتب سعر الطلب:")
     await OrderState.price.set()
 
+# ================= PRICE HANDLER =================
 @dp.message_handler(state=OrderState.price)
 async def process_price(msg: types.Message, state: FSMContext):
+    print(f"✅ سعر: {msg.text}")
     price = msg.text.strip()
     
     if not validate_price(price):
@@ -474,16 +508,20 @@ async def process_price(msg: types.Message, state: FSMContext):
     await msg.answer("📝 ملاحظات؟ (اكتب 'لا' بدون):")
     await OrderState.notes.set()
 
+# ================= NOTES HANDLER =================
 @dp.message_handler(state=OrderState.notes)
 async def process_notes(msg: types.Message, state: FSMContext):
+    print(f"✅ ملاحظات: {msg.text}")
     notes = "لا يوجد" if msg.text.strip().lower() in ["لا", "لايوجد"] else msg.text.strip()
     await state.update_data(notes=notes)
     await msg.answer("📸 ارسل الصور (1-4) أو اكتب 'تم':")
     await state.update_data(images=[])
     await OrderState.images.set()
 
+# ================= PHOTO HANDLER =================
 @dp.message_handler(content_types=['photo'], state=OrderState.images)
 async def process_photo(msg: types.Message, state: FSMContext):
+    print("✅ صورة مستلمة")
     data = await state.get_data()
     images = data.get("images", [])
     
@@ -495,8 +533,10 @@ async def process_photo(msg: types.Message, state: FSMContext):
     await state.update_data(images=images)
     await msg.answer(f"✅ صورة ({len(images)}/4)")
 
+# ================= FINISH ORDER HANDLER =================
 @dp.message_handler(state=OrderState.images)
 async def finish_order(msg: types.Message, state: FSMContext):
+    print(f"✅ انتهاء: {msg.text}")
     if "تم" not in msg.text.lower():
         await msg.answer("❌ اكتب 'تم' أو أرسل صورة:")
         return
@@ -529,12 +569,14 @@ async def finish_order(msg: types.Message, state: FSMContext):
         )
         
         await msg.answer(f"✅ طلب #{order_id} تم!")
+        print(f"✅✅✅ تم إنشاء الطلب #{order_id}")
     except Exception as e:
         print(f"❌ خطأ: {e}")
         await msg.answer(f"❌ خطأ: {str(e)}")
     finally:
         await state.finish()
 
+# ================= MOVE ORDER HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("move_"))
 async def move_order(call: types.CallbackQuery):
     try:
