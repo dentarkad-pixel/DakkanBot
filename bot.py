@@ -111,14 +111,10 @@ def get_next_order_id(file_name: str = "orders.xlsx"):
 def save_to_excel(data, file_name: str = "orders.xlsx"):
     """احفظ الطلب في ملف Excel"""
     try:
-        # تأكد من وجود الملف
         init_excel_file(file_name)
-        
-        # احمل الملف
         wb = load_workbook(file_name)
         ws = wb.active
         
-        # أضف البيانات
         ws.append([
             data.get("id"),
             data.get("name"),
@@ -137,12 +133,66 @@ def save_to_excel(data, file_name: str = "orders.xlsx"):
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ])
         
-        # احفظ الملف
         wb.save(file_name)
         print(f"✅ تم حفظ الطلب #{data['id']} في {file_name}")
         
     except Exception as e:
         print(f"❌ خطأ في حفظ الإكسل: {e}")
+
+def create_ready_orders_file():
+    """إنشاء ملف بالطلبات الموجودة في كروب مجهز فقط"""
+    try:
+        ready_file = "orders_ready_current.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Ready Orders"
+        
+        # أضف رؤوس الأعمدة
+        ws.append([
+            "رقم الطلب",
+            "الاسم",
+            "الهاتف",
+            "المدينة",
+            "المنطقة",
+            "النوع",
+            "القطع",
+            "الأوفر",
+            "الملحف",
+            "لون البوكس",
+            "عدد التوزيعات",
+            "القياس",
+            "السعر",
+            "ملاحظات"
+        ])
+        
+        # أضف فقط الطلبات في كروب مجهز
+        for order_id, order_info in orders_data.items():
+            if order_info.get("current_group") == "ready":
+                data = order_info.get("data", {})
+                ws.append([
+                    order_id,
+                    data.get("name"),
+                    data.get("phone"),
+                    data.get("city"),
+                    data.get("area"),
+                    data.get("order_type"),
+                    ",".join(data.get("pieces", [])),
+                    data.get("over_type", "لا يوجد"),
+                    data.get("hand_type", "لا يوجد"),
+                    data.get("box_color", "لا يوجد"),
+                    data.get("dist_count", "لا يوجد"),
+                    data.get("size"),
+                    data.get("price"),
+                    data.get("notes")
+                ])
+        
+        wb.save(ready_file)
+        print(f"✅ تم إنشاء ملف الطلبات الجاهزة: {ready_file}")
+        return ready_file
+    
+    except Exception as e:
+        print(f"❌ خطأ في إنشاء ملف الجاهزة: {e}")
+        return None
 
 # ================= VALIDATION FUNCTIONS =================
 def validate_phone(phone: str) -> bool:
@@ -278,7 +328,7 @@ def get_size_kb() -> InlineKeyboardMarkup:
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish()
-    await msg.answer("👋 مرحباً!\n\n/new - إنشاء طلب جديد\n/download - تحميل ملف مجهز")
+    await msg.answer("👋 مرحباً!\n\n/new - إنشاء طلب جديد\n/download - تحميل ملف الطلبات الجاهزة")
 
 @dp.message_handler(commands=['new'])
 async def cmd_new(msg: types.Message, state: FSMContext):
@@ -288,22 +338,33 @@ async def cmd_new(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=['download'])
 async def cmd_download(msg: types.Message):
-    file_path = "orders_ready.xlsx"
+    """تحميل ملف الطلبات الموجودة في كروب مجهز فقط"""
     
-    if not os.path.exists(file_path):
-        await msg.answer("❌ لا يوجد طلبات مجهزة حتى الآن!")
+    # تحقق من وجود طلبات في كروب مجهز
+    ready_orders = {oid: info for oid, info in orders_data.items() 
+                    if info.get("current_group") == "ready"}
+    
+    if not ready_orders:
+        await msg.answer("❌ لا توجد طلبات في كروب 'مجهز' حتى الآن!")
         return
     
     try:
-        with open(file_path, 'rb') as file:
-            await bot.send_document(
-                chat_id=msg.from_user.id,
-                document=types.InputFile(file_path),
-                caption="📊 ملف الطلبات المجهزة"
-            )
-        await msg.answer("✅ تم إرسال الملف!")
+        # أنشئ ملف Excel بالطلبات الجاهزة فقط
+        file_path = create_ready_orders_file()
+        
+        if file_path and os.path.exists(file_path):
+            with open(file_path, 'rb') as file:
+                await bot.send_document(
+                    chat_id=msg.from_user.id,
+                    document=types.InputFile(file_path),
+                    caption=f"📊 ملف الطلبات الجاهزة\n\n📦 عدد الطلبات: {len(ready_orders)}"
+                )
+            await msg.answer("✅ تم إرسال الملف!")
+        else:
+            await msg.answer("❌ حدث خطأ في إنشاء الملف!")
+    
     except Exception as e:
-        print(f"❌ خطأ في إرسال الملف: {e}")
+        print(f"❌ خطأ في التحميل: {e}")
         await msg.answer(f"❌ خطأ: {str(e)}")
 
 @dp.message_handler(state=OrderState.name)
@@ -343,7 +404,7 @@ async def process_area(msg: types.Message, state: FSMContext):
         await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
         return
     await state.update_data(area=area)
-    await msg.answer("��� اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
     await OrderState.order_type.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
@@ -505,7 +566,6 @@ async def finish_order(msg: types.Message, state: FSMContext):
         data = await state.get_data()
         images_list = data.get("images", [])
 
-        # إضف رقم الطلب للبيانات
         data["id"] = order_id
 
         orders_data[order_id] = {
@@ -514,7 +574,6 @@ async def finish_order(msg: types.Message, state: FSMContext):
             "current_group": "new"
         }
 
-        # احفظ في الإكسل
         save_to_excel(data, "orders.xlsx")
 
         text = format_order_text(data, order_id, "new")
@@ -532,7 +591,6 @@ async def finish_order(msg: types.Message, state: FSMContext):
         )
         
         await msg.answer(f"✅ طلب #{order_id} تم!")
-        print(f"✅✅✅ تم إنشاء الطلب #{order_id}")
     except Exception as e:
         print(f"❌ خطأ: {e}")
         await msg.answer(f"❌ خطأ: {str(e)}")
@@ -575,11 +633,6 @@ async def move_order(call: types.CallbackQuery):
         )
 
         await call.message.delete()
-        
-        if target_group_name == "ready":
-            save_to_excel(data, "orders_ready.xlsx")
-            print(f"📊 تم حفظ الطلب #{order_id} في ملف مجهز!")
-        
         orders_data[order_id]["current_group"] = target_group_name
 
         target_name = GROUPS_NAMES.get(target_group_id)
@@ -591,7 +644,5 @@ async def move_order(call: types.CallbackQuery):
 
 if __name__ == "__main__":
     print("🚀 البوت يعمل...")
-    # تأكد من إنشاء الملفات عند البدء
     init_excel_file("orders.xlsx")
-    init_excel_file("orders_ready.xlsx")
     executor.start_polling(dp, skip_updates=True)
