@@ -217,7 +217,7 @@ def get_order_type_kb() -> InlineKeyboardMarkup:
 
 pieces_list = [
     "سيت 3", "سيت 6", "أوفر", "كلو", "صدرية", 
-    "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
+    "��ضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
 ]
 
 def get_pieces_kb(selected: list) -> InlineKeyboardMarkup:
@@ -264,17 +264,41 @@ def get_size_kb() -> InlineKeyboardMarkup:
         kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
     return kb
 
-# ================= HANDLERS =================
+# ================= MAIN HANDLERS =================
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish()
-    await msg.answer("👋 مرحباً! اكتب /new لإنشاء طلب جديد")
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("➕ طلب جديد", callback_data="new_order"))
+    kb.add(InlineKeyboardButton("📊 تحميل ملف مجهز", callback_data="download_ready"))
+    await msg.answer("👋 مرحباً! اختر:", reply_markup=kb)
 
-@dp.message_handler(commands=['new'])
-async def cmd_new(msg: types.Message, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data == "new_order")
+async def start_new_order(call: types.CallbackQuery, state: FSMContext):
     await state.finish()
-    await msg.answer("👤 اسم الزبون:")
+    await call.message.answer("👤 اسم الزبون:")
     await OrderState.name.set()
+
+@dp.callback_query_handler(lambda c: c.data == "download_ready")
+async def download_ready_file(call: types.CallbackQuery):
+    """إرسال ملف Excel للطلبات المجهزة"""
+    file_path = "orders_ready.xlsx"
+    
+    if not os.path.exists(file_path):
+        await call.answer("❌ لا يوجد طلبات مجهزة حتى الآن!", show_alert=True)
+        return
+    
+    try:
+        with open(file_path, 'rb') as file:
+            await bot.send_document(
+                chat_id=call.from_user.id,
+                document=types.InputFile(file_path),
+                caption="📊 ملف الطلبات المجهزة"
+            )
+        await call.answer("✅ تم إرسال الملف!", show_alert=False)
+    except Exception as e:
+        print(f"❌ خطأ في إرسال الملف: {e}")
+        await call.answer(f"❌ خطأ: {str(e)}", show_alert=True)
 
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
@@ -291,7 +315,7 @@ async def process_name(msg: types.Message, state: FSMContext):
 async def process_phone(msg: types.Message, state: FSMContext):
     phone = msg.text.strip()
     if not validate_phone(phone):
-        await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
+        await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخر��:")
         return
     
     await state.update_data(phone=phone)
@@ -513,7 +537,6 @@ async def finish_order(msg: types.Message, state: FSMContext):
             "current_group": "new"
         }
 
-        # احفظ في ملف Excel العام
         save_to_excel({**data, "id": order_id}, "orders.xlsx")
 
         text = format_order_text(data, order_id, "new")
@@ -579,7 +602,6 @@ async def move_order(call: types.CallbackQuery):
             save_to_excel({**data, "id": order_id}, "orders_ready.xlsx")
             print(f"📊 تم حفظ الطلب #{order_id} في ملف مجهز!")
         
-        # حدّث معلومات الطلب
         orders_data[order_id]["current_group"] = target_group_name
 
         target_name = GROUPS_NAMES.get(target_group_id)
