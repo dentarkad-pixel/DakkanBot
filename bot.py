@@ -41,6 +41,9 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 orders_data = {}
 
+# قاموس لتخزين رسائل الطلبات بحسب الكروب والـ order_id
+message_ids = {}  # {order_id: {group_id: message_id}}
+
 # ================= STATES =================
 class OrderState(StatesGroup):
     name = State()
@@ -70,7 +73,7 @@ def init_excel_file(file_name: str = "orders.xlsx"):
                 "رقم الطلب",
                 "الاسم",
                 "الهاتف",
-                "المدينة",
+                "المحافظة",
                 "المنطقة",
                 "النوع",
                 "القطع",
@@ -152,7 +155,7 @@ def create_ready_orders_file():
             "رقم الطلب",
             "الاسم",
             "الهاتف",
-            "المدينة",
+            "المحافظة",
             "المنطقة",
             "النوع",
             "القطع",
@@ -246,7 +249,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 
 👤 *الاسم:* {data['name']}
 📞 *الهاتف:* {data['phone']}
-📍 *المدينة - المنطقة:* {data['city']} - {data['area']}
+📍 *المحافظة - المنطقة:* {data['city']} - {data['area']}
 
 🧵 *النوع:* {data['order_type']}
 👕 *القطع:* {', '.join(data['pieces'])}
@@ -394,7 +397,7 @@ async def cmd_download(msg: types.Message):
     
     except Exception as e:
         print(f"❌ خطأ في التحميل: {e}")
-        await msg.answer(f"�� خطأ: {str(e)}")
+        await msg.answer(f"❌ خطأ: {str(e)}")
 
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
@@ -413,24 +416,24 @@ async def process_phone(msg: types.Message, state: FSMContext):
         await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
         return
     await state.update_data(phone=phone)
-    await msg.answer("📍 المدينة:")
+    await msg.answer("📍 اختر المحافظة:", reply_markup=get_cities_kb())
     await OrderState.city.set()
 
-@dp.message_handler(state=OrderState.city)
-async def process_city(msg: types.Message, state: FSMContext):
-    city = msg.text.strip()
-    if len(city) < 2:
-        await msg.answer("❌ اسم المدينة قصير جداً، حاول مرة أخرى:")
-        return
+@dp.callback_query_handler(lambda c: c.data.startswith("city_"), state=OrderState.city)
+async def process_city(call: types.CallbackQuery, state: FSMContext):
+    city = call.data.replace("city_", "")
     await state.update_data(city=city)
-    await msg.answer("🏘 اختر المحافظة:", reply_markup=get_cities_kb())
+    await call.message.answer("🏘 اسم المنطقة:")
     await OrderState.area.set()
 
-@dp.callback_query_handler(lambda c: c.data.startswith("city_"), state=OrderState.area)
-async def process_area(call: types.CallbackQuery, state: FSMContext):
-    area = call.data.replace("city_", "")
+@dp.message_handler(state=OrderState.area)
+async def process_area(msg: types.Message, state: FSMContext):
+    area = msg.text.strip()
+    if len(area) < 2:
+        await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
+        return
     await state.update_data(area=area)
-    await call.message.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
     await OrderState.order_type.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
@@ -605,16 +608,29 @@ async def finish_order(msg: types.Message, state: FSMContext):
         text = format_order_text(data, order_id, "new")
         status_kb = get_status_buttons(order_id, "new")
 
+        # إرسال الصور أولاً
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            await bot.send_media_group(chat_id=GROUP_NEW, media=media)
+            msg_group = await bot.send_media_group(chat_id=GROUP_NEW, media=media)
+            # احفظ معرف رسالة الصور
+            if order_id not in message_ids:
+                message_ids[order_id] = {}
+            if msg_group:
+                message_ids[order_id][GROUP_NEW] = [m.message_id for m in msg_group]
         
-        await bot.send_message(
+        # إرسال النص مع الأزرار
+        msg_text = await bot.send_message(
             chat_id=GROUP_NEW, 
             text=text, 
             reply_markup=status_kb, 
             parse_mode='Markdown'
         )
+        
+        if order_id not in message_ids:
+            message_ids[order_id] = {}
+        if GROUP_NEW not in message_ids[order_id]:
+            message_ids[order_id][GROUP_NEW] = []
+        message_ids[order_id][GROUP_NEW].append(msg_text.message_id)
         
         await msg.answer(f"✅ طلب #{order_id} تم!")
     except Exception as e:
@@ -647,23 +663,45 @@ async def move_order(call: types.CallbackQuery):
         text = format_order_text(data, order_id, target_group_name)
         status_kb = get_status_buttons(order_id, target_group_name)
 
+        # احصل على معرف الكروب الحالي
+        current_group_id = GROUPS_MAP.get(current_group)
+
+        # ✅ حذف جميع الرسائل من الكروب السابق
+        try:
+            if order_id in message_ids and current_group_id in message_ids[order_id]:
+                for msg_id in message_ids[order_id][current_group_id]:
+                    try:
+                        await bot.delete_message(chat_id=current_group_id, message_id=msg_id)
+                        print(f"✅ تم حذف الرسالة {msg_id} من الكروب {current_group_id}")
+                    except Exception as e:
+                        print(f"⚠️ خطأ في حذف الرسالة {msg_id}: {e}")
+                
+                # احذف من القاموس
+                del message_ids[order_id][current_group_id]
+        except Exception as e:
+            print(f"⚠️ خطأ في حذف الرسائل: {e}")
+
+        # أرسل للكروب الجديد
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            await bot.send_media_group(chat_id=target_group_id, media=media)
+            msg_group = await bot.send_media_group(chat_id=target_group_id, media=media)
+            if order_id not in message_ids:
+                message_ids[order_id] = {}
+            if msg_group:
+                message_ids[order_id][target_group_id] = [m.message_id for m in msg_group]
         
-        await bot.send_message(
+        msg_text = await bot.send_message(
             chat_id=target_group_id, 
             text=text, 
             reply_markup=status_kb, 
             parse_mode='Markdown'
         )
-
-        # ✅ حذف الطلب مع الصور من الكروب السابق
-        try:
-            await call.message.delete()
-            print(f"✅ تم حذف الرسالة والصور من الكروب السابق")
-        except Exception as e:
-            print(f"⚠️ لم يتمكن من حذف الرسالة: {e}")
+        
+        if order_id not in message_ids:
+            message_ids[order_id] = {}
+        if target_group_id not in message_ids[order_id]:
+            message_ids[order_id][target_group_id] = []
+        message_ids[order_id][target_group_id].append(msg_text.message_id)
         
         orders_data[order_id]["current_group"] = target_group_name
 
