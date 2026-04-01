@@ -7,7 +7,6 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from openpyxl import Workbook, load_workbook
-import asyncio
 
 # ================= TOKEN & GROUPS =================
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -75,7 +74,6 @@ def get_next_order_id():
         return 1
 
 def init_excel_file(file_name: str):
-    """إنشاء ملف Excel إذا كان غير موجود"""
     if not os.path.exists(file_name):
         wb = Workbook()
         ws = wb.active
@@ -88,7 +86,6 @@ def init_excel_file(file_name: str):
         wb.save(file_name)
 
 def save_to_excel(data, file_name="orders.xlsx"):
-    """احفظ الطلب في ملف Excel"""
     init_excel_file(file_name)
     
     try:
@@ -115,32 +112,13 @@ def save_to_excel(data, file_name="orders.xlsx"):
     except Exception as e:
         print(f"❌ خطأ في حفظ الإكسل: {e}")
 
-def remove_from_excel(order_id: int, file_name: str):
-    """حذف الطلب من ملف Excel"""
-    if not os.path.exists(file_name):
-        return
-    
-    try:
-        wb = load_workbook(file_name)
-        ws = wb.active
-        
-        for row in range(2, ws.max_row + 1):
-            if ws[f'A{row}'].value == order_id:
-                ws.delete_rows(row, 1)
-                break
-        
-        wb.save(file_name)
-        print(f"✅ تم حذف الطلب #{order_id} من {file_name}")
-    except Exception as e:
-        print(f"❌ خطأ في حذف من الإكسل: {e}")
-
 # ================= VALIDATION FUNCTIONS =================
 def validate_phone(phone: str) -> bool:
     phone = phone.strip()
     return bool(re.match(r'^[0-9\+\-\s\(\)]{7,15}$', phone))
 
 def validate_price(price: str) -> bool:
-    price = price.strip()
+    price = phone.strip()
     try:
         float(price)
         return True
@@ -217,7 +195,7 @@ def get_order_type_kb() -> InlineKeyboardMarkup:
 
 pieces_list = [
     "سيت 3", "سيت 6", "أوفر", "كلو", "صدرية", 
-    "��ضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
+    "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
 ]
 
 def get_pieces_kb(selected: list) -> InlineKeyboardMarkup:
@@ -264,41 +242,38 @@ def get_size_kb() -> InlineKeyboardMarkup:
         kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
     return kb
 
-# ================= MAIN HANDLERS =================
+# ================= HANDLERS =================
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish()
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("➕ طلب جديد", callback_data="new_order"))
-    kb.add(InlineKeyboardButton("📊 تحميل ملف مجهز", callback_data="download_ready"))
-    await msg.answer("👋 مرحباً! اختر:", reply_markup=kb)
+    await msg.answer("👋 مرحباً! اكتب /new لإنشاء طلب جديد أو /download لتحميل الملف")
 
-@dp.callback_query_handler(lambda c: c.data == "new_order")
-async def start_new_order(call: types.CallbackQuery, state: FSMContext):
+@dp.message_handler(commands=['new'])
+async def cmd_new(msg: types.Message, state: FSMContext):
     await state.finish()
-    await call.message.answer("👤 اسم الزبون:")
+    await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
 
-@dp.callback_query_handler(lambda c: c.data == "download_ready")
-async def download_ready_file(call: types.CallbackQuery):
-    """إرسال ملف Excel للطلبات المجهزة"""
+@dp.message_handler(commands=['download'])
+async def cmd_download(msg: types.Message):
+    """تحميل ملف Excel للطلبات المجهزة"""
     file_path = "orders_ready.xlsx"
     
     if not os.path.exists(file_path):
-        await call.answer("❌ لا يوجد طلبات مجهزة حتى الآن!", show_alert=True)
+        await msg.answer("❌ لا يوجد طلبات مجهزة حتى الآن!")
         return
     
     try:
         with open(file_path, 'rb') as file:
             await bot.send_document(
-                chat_id=call.from_user.id,
+                chat_id=msg.from_user.id,
                 document=types.InputFile(file_path),
                 caption="📊 ملف الطلبات المجهزة"
             )
-        await call.answer("✅ تم إرسال الملف!", show_alert=False)
+        await msg.answer("✅ تم إرسال الملف!")
     except Exception as e:
         print(f"❌ خطأ في إرسال الملف: {e}")
-        await call.answer(f"❌ خطأ: {str(e)}", show_alert=True)
+        await msg.answer(f"❌ خطأ: {str(e)}")
 
 @dp.message_handler(state=OrderState.name)
 async def process_name(msg: types.Message, state: FSMContext):
@@ -315,7 +290,7 @@ async def process_name(msg: types.Message, state: FSMContext):
 async def process_phone(msg: types.Message, state: FSMContext):
     phone = msg.text.strip()
     if not validate_phone(phone):
-        await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخر��:")
+        await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
         return
     
     await state.update_data(phone=phone)
@@ -597,7 +572,6 @@ async def move_order(call: types.CallbackQuery):
 
         await call.message.delete()
         
-        # إذا نقلت إلى "ready"، احفظ في ملف Excel خاص
         if target_group_name == "ready":
             save_to_excel({**data, "id": order_id}, "orders_ready.xlsx")
             print(f"📊 تم حفظ الطلب #{order_id} في ملف مجهز!")
