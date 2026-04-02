@@ -290,13 +290,14 @@ def validate_phone(phone: str) -> bool:
     normalized = normalize_phone(phone)
     return normalized.startswith("07") and len(normalized) == 11 and normalized.isdigit()
 
+def normalize_price(price: str) -> str:
+    normalized = normalize_digits(price.strip())
+    # Keep digits only (no separators at all).
+    return re.sub(r"\D", "", normalized)
+
 def validate_price(price: str) -> bool:
-    price = price.strip()
-    try:
-        float(price)
-        return True
-    except:
-        return False
+    price = normalize_price(price)
+    return price.isdigit() and len(price) > 0
 
 def validate_dist_count(count: str) -> bool:
     count = count.strip()
@@ -762,11 +763,12 @@ async def process_size(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(state=OrderState.price)
 async def process_price(msg: types.Message, state: FSMContext):
-    price = msg.text.strip()
-    if not validate_price(price):
+    raw_price = msg.text.strip()
+    normalized_price = normalize_price(raw_price)
+    if not validate_price(raw_price):
         await msg.answer("❌ أدخل سعراً صحيحاً:")
         return
-    await state.update_data(price=price)
+    await state.update_data(price=normalized_price)
     await msg.answer("📝 ملاحظات؟ (اكتب 'لا' بدون):")
     await OrderState.notes.set()
 
@@ -914,9 +916,12 @@ async def save_edited_field(msg: types.Message, state: FSMContext):
                 return
             new_value = normalized_phone
         
-        if field_name == "price" and not validate_price(new_value):
-            await msg.answer("❌ السعر غير صحيح! حاول مرة أخرى:")
-            return
+        if field_name == "price":
+            normalized_price = normalize_price(new_value)
+            if not validate_price(new_value):
+                await msg.answer("❌ السعر غير صحيح! حاول مرة أخرى:")
+                return
+            new_value = normalized_price
         
         # تحديث البيانات
         orders_data[order_id]["data"][field_name] = new_value
@@ -1064,3 +1069,4 @@ if __name__ == "__main__":
         await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
 
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+
