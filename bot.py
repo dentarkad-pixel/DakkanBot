@@ -2,7 +2,7 @@ import os
 import re
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -21,21 +21,58 @@ GROUP_READY = -1003312397488
 GROUP_SENT = -1003671523271
 GROUP_ISSUES = -1003747379674
 
-GROUPS_MAP = {
-    "new": GROUP_NEW,
-    "design": GROUP_DESIGN,
-    "ready": GROUP_READY,
-    "sent": GROUP_SENT,
-    "issues": GROUP_ISSUES
+def env_int(name: str, default=None):
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"⚠️ قيمة غير صالحة في {name}: {value}")
+        return default
+
+# Optional topics mode (forum group):
+# FORUM_GROUP_ID + TOPIC_*_ID
+FORUM_GROUP_ID = env_int("FORUM_GROUP_ID")
+TOPIC_IDS = {
+    "new": env_int("TOPIC_NEW_ID"),
+    "design": env_int("TOPIC_DESIGN_ID"),
+    "ready": env_int("TOPIC_READY_ID"),
+    "sent": env_int("TOPIC_SENT_ID"),
+    "issues": env_int("TOPIC_ISSUES_ID")
 }
 
-GROUPS_NAMES = {
-    GROUP_NEW: "طلبات جديدة",
-    GROUP_DESIGN: "تم التصميم",
-    GROUP_READY: "مجهز",
-    GROUP_SENT: "تم الإرسال",
-    GROUP_ISSUES: "مشاكل"
+STATUS_DISPLAY_NAMES = {
+    "new": "طلبات جديدة",
+    "design": "تم التصميم",
+    "ready": "مجهز",
+    "sent": "تم الإرسال",
+    "issues": "مشاكل"
 }
+
+USE_FORUM_TOPICS = FORUM_GROUP_ID is not None and all(TOPIC_IDS.get(s) for s in TOPIC_IDS)
+
+if USE_FORUM_TOPICS:
+    TARGETS_MAP = {
+        status: {"chat_id": FORUM_GROUP_ID, "thread_id": TOPIC_IDS[status]}
+        for status in STATUS_DISPLAY_NAMES
+    }
+    print("✅ وضع Topics مفعل")
+else:
+    TARGETS_MAP = {
+        "new": {"chat_id": GROUP_NEW, "thread_id": None},
+        "design": {"chat_id": GROUP_DESIGN, "thread_id": None},
+        "ready": {"chat_id": GROUP_READY, "thread_id": None},
+        "sent": {"chat_id": GROUP_SENT, "thread_id": None},
+        "issues": {"chat_id": GROUP_ISSUES, "thread_id": None}
+    }
+
+def get_target(status: str) -> dict:
+    return TARGETS_MAP[status]
+
+def get_target_key(status: str):
+    target = get_target(status)
+    return (target["chat_id"], target["thread_id"] or 0)
 
 # الكليشية
 FOOTER_TEXT = """
@@ -67,6 +104,9 @@ class OrderState(StatesGroup):
     city = State()
     area = State()
     order_type = State()
+    team = State()
+    team_other = State()
+    sport_number = State()
     pieces = State()
     over_type = State()
     hand_type = State()
@@ -240,6 +280,10 @@ def validate_dist_count(count: str) -> bool:
     except:
         return False
 
+def validate_sport_number(num: str) -> bool:
+    num = num.strip()
+    return num.isdigit() and len(num) <= 3
+
 # ================= HELPER FUNCTIONS =================
 def get_status_buttons(order_id: int, current_group: str = "new") -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
@@ -269,7 +313,15 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     box = data.get("box_color", "لا يوجد")
     dist = data.get("dist_count", "لا يوجد")
     source = data.get("source", "غير محدد")
-    group_display = GROUPS_NAMES.get(GROUPS_MAP.get(current_group), "غير معروف")
+    group_display = STATUS_DISPLAY_NAMES.get(current_group, "غير معروف")
+    team = data.get("team")
+    sport_number = data.get("sport_number")
+
+    sport_line = ""
+    if team:
+        sport_line += f"\n⚽ *الفريق:* {team}"
+    if sport_number:
+        sport_line += f"\n🔢 *الرقم:* {sport_number}"
 
     text = f"""📦 *طلب #{order_id}*
 
@@ -279,6 +331,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 📍 *المحافظة - المنطقة:* {data['city']} - {data['area']}
 
 🧵 *النوع:* {data['order_type']}
+{sport_line}
 👕 *القطع:* {', '.join(data['pieces'])}
 
 👗 *الأوفر:* {over}
@@ -337,12 +390,22 @@ def get_order_type_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.add(
         InlineKeyboardButton("🖨 طباعة", callback_data="type_print"),
-        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb")
+        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb"),
+        InlineKeyboardButton("⚽ رياضي", callback_data="type_sport")
     )
     return kb
 
+teams_list = ["برشلونة", "ريال مدريد", "بايرن", "مانشستر يونايتد", "مانشستر سيتي", "تشيلسي", "ليفربول", "باريس سان جيرمان", "يوفنتوس", "أرسنال"]
+
+def get_teams_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    for team in teams_list:
+        kb.insert(InlineKeyboardButton(f"⚽ {team}", callback_data=f"team_{team}"))
+    kb.add(InlineKeyboardButton("✍️ فريق آخر", callback_data="team_other"))
+    return kb
+
 pieces_list = [
-    "سيت 3", "سيت 6", "أوفر", "كلو", "صدرية", 
+    "سيت 3", "سيت 6", "سيت 8", "أوفر", "كلو", "صدرية", 
     "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
 ]
 
@@ -406,13 +469,22 @@ def get_edit_options_kb(order_id: int) -> InlineKeyboardMarkup:
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish()
-    await msg.answer("👋 مرحباً!\n\n/new - إنشاء طلب جديد\n/download - تحميل ملف الطلبات الجاهزة")
+    await msg.answer("👋 مرحباً!\n\n/start - الصفحة الرئيسية\n/new - إنشاء طلب جديد\n/cancel - إلغاء الطلب الحالي\n/download - تحميل ملف الطلبات الجاهزة")
 
 @dp.message_handler(commands=['new'])
 async def cmd_new(msg: types.Message, state: FSMContext):
     await state.finish()
     await msg.answer("👤 اسم الزبون:")
     await OrderState.name.set()
+
+@dp.message_handler(commands=['cancel'], state='*')
+async def cmd_cancel(msg: types.Message, state: FSMContext):
+    current = await state.get_state()
+    await state.finish()
+    if current is None:
+        await msg.answer("ℹ️ لا يوجد طلب قيد الإنشاء.")
+    else:
+        await msg.answer("✅ تم إلغاء الطلب الحالي. ابدأ طلب جديد مباشرة عبر /new")
 
 @dp.message_handler(commands=['download'])
 async def cmd_download(msg: types.Message):
@@ -489,9 +561,56 @@ async def process_area(msg: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
 async def process_order_type(call: types.CallbackQuery, state: FSMContext):
-    order_type = "طباعة" if call.data == "type_print" else "تطريز"
+    if call.data == "type_print":
+        order_type = "طباعة"
+    elif call.data == "type_emb":
+        order_type = "تطريز"
+    else:
+        order_type = "رياضي"
+
     await state.update_data(order_type=order_type)
+
+    if order_type == "رياضي":
+        await call.message.answer("⚽ اختر الفريق:", reply_markup=get_teams_kb())
+        await OrderState.team.set()
+        return
+
     await call.message.edit_text("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
+    await state.update_data(pieces=[])
+    await OrderState.pieces.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("team_"), state=OrderState.team)
+async def process_team(call: types.CallbackQuery, state: FSMContext):
+    team_value = call.data.replace("team_", "")
+    if team_value == "other":
+        await call.message.answer("✍️ اكتب اسم الفريق:")
+        await OrderState.team_other.set()
+        return
+
+    await state.update_data(team=team_value)
+    await call.message.answer("🔢 اكتب رقم اللاعب:")
+    await OrderState.sport_number.set()
+
+@dp.message_handler(state=OrderState.team_other)
+async def process_team_other(msg: types.Message, state: FSMContext):
+    team_name = msg.text.strip()
+    if len(team_name) < 2:
+        await msg.answer("❌ اسم الفريق قصير جداً، حاول مرة أخرى:")
+        return
+
+    await state.update_data(team=team_name)
+    await msg.answer("🔢 اكتب رقم اللاعب:")
+    await OrderState.sport_number.set()
+
+@dp.message_handler(state=OrderState.sport_number)
+async def process_sport_number(msg: types.Message, state: FSMContext):
+    sport_number = msg.text.strip()
+    if not validate_sport_number(sport_number):
+        await msg.answer("❌ اكتب رقم صحيح (أرقام فقط):")
+        return
+
+    await state.update_data(sport_number=sport_number)
+    await msg.answer("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
     await state.update_data(pieces=[])
     await OrderState.pieces.set()
 
@@ -514,8 +633,8 @@ async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
     if not pieces:
         await call.answer("❌ اختر قطعة واحدة على الأقل!", show_alert=True)
         return
-    need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 6"])
-    need_hand = any(p in pieces for p in ["ملحف", "سيت 3", "سيت 6"])
+    need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 8"])
+    need_hand = any(p in pieces for p in ["ملحف", "سيت 8"])
     need_box = "بوكس ككو" in pieces
     need_dist = "توزيعات" in pieces
     await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
@@ -658,27 +777,33 @@ async def finish_order(msg: types.Message, state: FSMContext):
 
         text = format_order_text(data, order_id, "new")
         status_kb = get_status_buttons(order_id, "new")
+        target = get_target("new")
+        target_key = get_target_key("new")
+        send_kwargs = {}
+        if target["thread_id"]:
+            send_kwargs["message_thread_id"] = target["thread_id"]
 
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            msg_group = await bot.send_media_group(chat_id=GROUP_NEW, media=media)
+            msg_group = await bot.send_media_group(chat_id=target["chat_id"], media=media, **send_kwargs)
             if order_id not in message_ids:
                 message_ids[order_id] = {}
             if msg_group:
-                message_ids[order_id][GROUP_NEW] = [m.message_id for m in msg_group]
+                message_ids[order_id][target_key] = [m.message_id for m in msg_group]
         
         msg_text = await bot.send_message(
-            chat_id=GROUP_NEW, 
+            chat_id=target["chat_id"], 
             text=text, 
             reply_markup=status_kb, 
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            **send_kwargs
         )
         
         if order_id not in message_ids:
             message_ids[order_id] = {}
-        if GROUP_NEW not in message_ids[order_id]:
-            message_ids[order_id][GROUP_NEW] = []
-        message_ids[order_id][GROUP_NEW].append(msg_text.message_id)
+        if target_key not in message_ids[order_id]:
+            message_ids[order_id][target_key] = []
+        message_ids[order_id][target_key].append(msg_text.message_id)
         
         await msg.answer(f"✅ طلب #{order_id} تم!")
     except Exception as e:
@@ -761,20 +886,21 @@ async def save_edited_field(msg: types.Message, state: FSMContext):
         
         # تحديث الرسالة في الكروب
         current_group = orders_data[order_id]["current_group"]
-        current_group_id = GROUPS_MAP.get(current_group)
+        current_target = get_target(current_group)
+        current_target_key = get_target_key(current_group)
         
         text = format_order_text(orders_data[order_id]["data"], order_id, current_group)
         status_kb = get_status_buttons(order_id, current_group)
         
-        print(f"📤 تحديث الرسالة في الكروب {current_group_id}")
+        print(f"📤 تحديث الرسالة في الوجهة {current_target}")
         
         try:
-            if order_id in message_ids and current_group_id in message_ids[order_id]:
+            if order_id in message_ids and current_target_key in message_ids[order_id]:
                 # حدّث آخر رسالة (رسالة النص، ليست الصور)
-                for msg_id in reversed(message_ids[order_id][current_group_id]):
+                for msg_id in reversed(message_ids[order_id][current_target_key]):
                     try:
                         await bot.edit_message_text(
-                            chat_id=current_group_id,
+                            chat_id=current_target["chat_id"],
                             message_id=msg_id,
                             text=text,
                             reply_markup=status_kb,
@@ -828,51 +954,57 @@ async def move_order(call: types.CallbackQuery):
             await call.answer("🔔 موجود هنا!", show_alert=True)
             return
 
-        target_group_id = GROUPS_MAP.get(target_group_name)
+        target = get_target(target_group_name)
+        target_key = get_target_key(target_group_name)
         text = format_order_text(data, order_id, target_group_name)
         status_kb = get_status_buttons(order_id, target_group_name)
 
-        current_group_id = GROUPS_MAP.get(current_group)
+        current_target = get_target(current_group)
+        current_target_key = get_target_key(current_group)
+        target_send_kwargs = {}
+        if target["thread_id"]:
+            target_send_kwargs["message_thread_id"] = target["thread_id"]
 
         # ✅ حذف جميع الرسائل من الكروب السابق
         try:
-            if order_id in message_ids and current_group_id in message_ids[order_id]:
-                for msg_id in message_ids[order_id][current_group_id]:
+            if order_id in message_ids and current_target_key in message_ids[order_id]:
+                for msg_id in message_ids[order_id][current_target_key]:
                     try:
-                        await bot.delete_message(chat_id=current_group_id, message_id=msg_id)
+                        await bot.delete_message(chat_id=current_target["chat_id"], message_id=msg_id)
                         print(f"✅ تم حذف الرسالة {msg_id}")
                     except Exception as e:
                         print(f"⚠️ خطأ في حذف الرسالة {msg_id}: {e}")
                 
-                del message_ids[order_id][current_group_id]
+                del message_ids[order_id][current_target_key]
         except Exception as e:
             print(f"⚠️ خطأ في حذف الرسائل: {e}")
 
         # أرسل للكروب الجديد
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
-            msg_group = await bot.send_media_group(chat_id=target_group_id, media=media)
+            msg_group = await bot.send_media_group(chat_id=target["chat_id"], media=media, **target_send_kwargs)
             if order_id not in message_ids:
                 message_ids[order_id] = {}
             if msg_group:
-                message_ids[order_id][target_group_id] = [m.message_id for m in msg_group]
+                message_ids[order_id][target_key] = [m.message_id for m in msg_group]
         
         msg_text = await bot.send_message(
-            chat_id=target_group_id, 
+            chat_id=target["chat_id"], 
             text=text, 
             reply_markup=status_kb, 
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            **target_send_kwargs
         )
         
         if order_id not in message_ids:
             message_ids[order_id] = {}
-        if target_group_id not in message_ids[order_id]:
-            message_ids[order_id][target_group_id] = []
-        message_ids[order_id][target_group_id].append(msg_text.message_id)
+        if target_key not in message_ids[order_id]:
+            message_ids[order_id][target_key] = []
+        message_ids[order_id][target_key].append(msg_text.message_id)
         
         orders_data[order_id]["current_group"] = target_group_name
 
-        target_name = GROUPS_NAMES.get(target_group_id)
+        target_name = STATUS_DISPLAY_NAMES.get(target_group_name, target_group_name)
         await call.answer(f"✅ {target_name}", show_alert=False)
 
     except Exception as e:
@@ -882,4 +1014,15 @@ async def move_order(call: types.CallbackQuery):
 if __name__ == "__main__":
     print("🚀 البوت يعمل...")
     init_excel_file("orders.xlsx")
-    executor.start_polling(dp, skip_updates=True)
+    async def on_startup(dp: Dispatcher):
+        commands = [
+            BotCommand("start", "بدء البوت"),
+            BotCommand("new", "طلب جديد"),
+            BotCommand("cancel", "إلغاء الطلب الحالي"),
+            BotCommand("download", "تحميل طلبات مجهز")
+        ]
+        await bot.set_my_commands(commands)
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
