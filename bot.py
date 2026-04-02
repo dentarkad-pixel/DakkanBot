@@ -37,12 +37,19 @@ GROUPS_NAMES = {
     GROUP_ISSUES: "مشاكل"
 }
 
+# الكليشية
+FOOTER_TEXT = """
+━━━━━━━━━━━━━━━━━━
+🔹 يرجى التأكد من الطلب عند الاستلام.
+🔹 في حال وجود خطأ أثناء الاستلام، تقدر ترجع الطلب بدون رسوم توصيل.
+🔹 بعد استلام الطلب ومغادرة المندوب، أي تعديل أو نقص يتم مع رسوم توصيل جديدة.
+
+🙏 شكراً لتفهمكم."""
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 orders_data = {}
-
-# قاموس لتخزين رسائل الطلبات بحسب الكروب والـ order_id
-message_ids = {}  # {order_id: {group_id: message_id}}
+message_ids = {}
 
 # ================= STATES =================
 class OrderState(StatesGroup):
@@ -60,6 +67,11 @@ class OrderState(StatesGroup):
     price = State()
     notes = State()
     images = State()
+
+# ================= EDIT STATES =================
+class EditOrderState(StatesGroup):
+    edit_field = State()
+    new_value = State()
 
 # ================= EXCEL FUNCTIONS =================
 def init_excel_file(file_name: str = "orders.xlsx"):
@@ -150,7 +162,6 @@ def create_ready_orders_file():
         ws = wb.active
         ws.title = "Ready Orders"
         
-        # أضف رؤوس الأعمدة
         ws.append([
             "رقم الطلب",
             "الاسم",
@@ -168,7 +179,6 @@ def create_ready_orders_file():
             "ملاحظات"
         ])
         
-        # أضف فقط الطلبات في كروب مجهز
         for order_id, order_info in orders_data.items():
             if order_info.get("current_group") == "ready":
                 data = order_info.get("data", {})
@@ -236,6 +246,9 @@ def get_status_buttons(order_id: int, current_group: str = "new") -> InlineKeybo
     if current_group != "issues":
         kb.insert(InlineKeyboardButton("⚠️ مشاكل", callback_data=f"move_{order_id}_issues"))
     
+    # أضف زر التعديل
+    kb.insert(InlineKeyboardButton("📝 تعديل الطلب", callback_data=f"edit_{order_id}"))
+    
     return kb
 
 def format_order_text(data: dict, order_id: int, current_group: str = "new") -> str:
@@ -266,11 +279,12 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 {data['notes']}
 
 ━━━━━━━━━━━━━━━━━━
-📍 *الحالة الحالية:* {group_display}"""
+📍 *الحالة الحالية:* {group_display}
+
+{FOOTER_TEXT}"""
     return text
 
 # ================= KEYBOARDS =================
-# قائمة المحافظات العراقية
 cities_list = [
     "بغداد",
     "الناصرية - ذي قار",
@@ -287,13 +301,12 @@ cities_list = [
     "صلاح الدين",
     "الانبار",
     "السماوة - المثنى",
-    "الموصل",
+    "ا��موصل",
     "الديوانية",
     "العمارة - ميسان"
 ]
 
 def get_cities_kb() -> InlineKeyboardMarkup:
-    """لوحة مفاتيح المحافظات"""
     kb = InlineKeyboardMarkup(row_width=2)
     for city in cities_list:
         kb.insert(InlineKeyboardButton(f"📍 {city}", callback_data=f"city_{city}"))
@@ -356,6 +369,18 @@ def get_size_kb() -> InlineKeyboardMarkup:
         kb.insert(InlineKeyboardButton(s, callback_data=f"size_{s}"))
     return kb
 
+def get_edit_options_kb(order_id: int) -> InlineKeyboardMarkup:
+    """لوحة مفاتيح خيارات التعديل"""
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("👤 الاسم", callback_data=f"edit_field_{order_id}_name"),
+        InlineKeyboardButton("📞 الهاتف", callback_data=f"edit_field_{order_id}_phone"),
+        InlineKeyboardButton("💰 السعر", callback_data=f"edit_field_{order_id}_price"),
+        InlineKeyboardButton("📝 ملاحظات", callback_data=f"edit_field_{order_id}_notes"),
+        InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_edit_{order_id}")
+    )
+    return kb
+
 # ================= HANDLERS =================
 @dp.message_handler(commands=['start'])
 async def cmd_start(msg: types.Message, state: FSMContext):
@@ -372,7 +397,6 @@ async def cmd_new(msg: types.Message, state: FSMContext):
 async def cmd_download(msg: types.Message):
     """تحميل ملف الطلبات الموجودة في كروب مجهز فقط"""
     
-    # تحقق من وجود طلبات في كروب مجهز
     ready_orders = {oid: info for oid, info in orders_data.items() 
                     if info.get("current_group") == "ready"}
     
@@ -381,7 +405,6 @@ async def cmd_download(msg: types.Message):
         return
     
     try:
-        # أنشئ ملف Excel بالطلبات الجاهزة فقط
         file_path = create_ready_orders_file()
         
         if file_path and os.path.exists(file_path):
@@ -608,17 +631,14 @@ async def finish_order(msg: types.Message, state: FSMContext):
         text = format_order_text(data, order_id, "new")
         status_kb = get_status_buttons(order_id, "new")
 
-        # إرسال الصور أولاً
         if images_list:
             media = [InputMediaPhoto(media=i) for i in images_list]
             msg_group = await bot.send_media_group(chat_id=GROUP_NEW, media=media)
-            # احفظ معرف رسالة الصور
             if order_id not in message_ids:
                 message_ids[order_id] = {}
             if msg_group:
                 message_ids[order_id][GROUP_NEW] = [m.message_id for m in msg_group]
         
-        # إرسال النص مع الأزرار
         msg_text = await bot.send_message(
             chat_id=GROUP_NEW, 
             text=text, 
@@ -639,6 +659,102 @@ async def finish_order(msg: types.Message, state: FSMContext):
     finally:
         await state.finish()
 
+# ================= EDIT HANDLERS =================
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_"))
+async def edit_order(call: types.CallbackQuery):
+    """فتح قائمة التعديل"""
+    order_id = int(call.data.split("_")[1])
+    
+    if order_id not in orders_data:
+        await call.answer("❌ لم أجد الطلب!", show_alert=True)
+        return
+    
+    await call.message.answer(
+        f"📝 اختر ما تريد تعديله في الطلب #{order_id}:",
+        reply_markup=get_edit_options_kb(order_id)
+    )
+
+@dp.callback_query_handler(lambda c: c.data.startswith("edit_field_"))
+async def edit_field(call: types.CallbackQuery, state: FSMContext):
+    """اختيار الحقل المراد تعديله"""
+    parts = call.data.split("_")
+    order_id = int(parts[2])
+    field_name = parts[3]
+    
+    field_display = {
+        "name": "الاسم",
+        "phone": "الهاتف",
+        "price": "السعر",
+        "notes": "الملاحظات"
+    }
+    
+    await state.update_data(edit_order_id=order_id, edit_field=field_name)
+    await call.message.answer(f"اكتب القيمة الجديدة للـ {field_display.get(field_name, field_name)}:")
+    await EditOrderState.new_value.set()
+
+@dp.message_handler(state=EditOrderState.new_value)
+async def save_edited_field(msg: types.Message, state: FSMContext):
+    """حفظ التعديل"""
+    data = await state.get_data()
+    order_id = data.get("edit_order_id")
+    field_name = data.get("edit_field")
+    new_value = msg.text.strip()
+    
+    if order_id not in orders_data:
+        await msg.answer("❌ لم أجد الطلب!")
+        await state.finish()
+        return
+    
+    # التحقق من صحة البيانات
+    if field_name == "phone" and not validate_phone(new_value):
+        await msg.answer("❌ رقم الهاتف غير صحيح!")
+        return
+    
+    if field_name == "price" and not validate_price(new_value):
+        await msg.answer("❌ السعر غير صحيح!")
+        return
+    
+    # تحديث البيانات
+    orders_data[order_id]["data"][field_name] = new_value
+    
+    # تحديث الرسالة في الكروب
+    current_group = orders_data[order_id]["current_group"]
+    current_group_id = GROUPS_MAP.get(current_group)
+    
+    text = format_order_text(orders_data[order_id]["data"], order_id, current_group)
+    status_kb = get_status_buttons(order_id, current_group)
+    
+    try:
+        if order_id in message_ids and current_group_id in message_ids[order_id]:
+            # حدّث آخر رسالة (رسالة النص، ليست الصور)
+            for msg_id in reversed(message_ids[order_id][current_group_id]):
+                try:
+                    await bot.edit_message_text(
+                        chat_id=current_group_id,
+                        message_id=msg_id,
+                        text=text,
+                        reply_markup=status_kb,
+                        parse_mode='Markdown'
+                    )
+                    break
+                except:
+                    pass
+    except Exception as e:
+        print(f"⚠️ خطأ في تحديث الرسالة: {e}")
+    
+    # حدّث Excel
+    save_to_excel(orders_data[order_id]["data"], "orders.xlsx")
+    
+    await msg.answer(f"✅ تم تعديل الطلب #{order_id} بنجاح!")
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("cancel_edit_"))
+async def cancel_edit(call: types.CallbackQuery, state: FSMContext):
+    """إلغاء التعديل"""
+    await state.finish()
+    await call.answer("❌ تم إلغاء التعديل", show_alert=False)
+
+# ================= MOVE ORDER HANDLER =================
 @dp.callback_query_handler(lambda c: c.data.startswith("move_"))
 async def move_order(call: types.CallbackQuery):
     try:
@@ -663,7 +779,6 @@ async def move_order(call: types.CallbackQuery):
         text = format_order_text(data, order_id, target_group_name)
         status_kb = get_status_buttons(order_id, target_group_name)
 
-        # احصل على معرف الكروب الحالي
         current_group_id = GROUPS_MAP.get(current_group)
 
         # ✅ حذف جميع الرسائل من الكروب السابق
@@ -672,11 +787,10 @@ async def move_order(call: types.CallbackQuery):
                 for msg_id in message_ids[order_id][current_group_id]:
                     try:
                         await bot.delete_message(chat_id=current_group_id, message_id=msg_id)
-                        print(f"✅ تم حذف الرسالة {msg_id} من الكروب {current_group_id}")
+                        print(f"✅ تم حذف الرسالة {msg_id}")
                     except Exception as e:
                         print(f"⚠️ خطأ في حذف الرسالة {msg_id}: {e}")
                 
-                # احذف من القاموس
                 del message_ids[order_id][current_group_id]
         except Exception as e:
             print(f"⚠️ خطأ في حذف الرسائل: {e}")
