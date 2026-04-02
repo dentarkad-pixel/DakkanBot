@@ -50,12 +50,20 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 orders_data = {}
 message_ids = {}
-editing_users = {}  # لتتبع المستخدمين الذين يعدلون
+
+# ================= مصادر الطلب =================
+sources_list = [
+    "دكان",
+    "أمير وأميرة",
+    "واتساب",
+    "تيك توك"
+]
 
 # ================= STATES =================
 class OrderState(StatesGroup):
     name = State()
     phone = State()
+    source = State()
     city = State()
     area = State()
     order_type = State()
@@ -86,6 +94,7 @@ def init_excel_file(file_name: str = "orders.xlsx"):
                 "رقم الطلب",
                 "الاسم",
                 "الهاتف",
+                "المصدر",
                 "المحافظة",
                 "المنطقة",
                 "النوع",
@@ -135,6 +144,7 @@ def save_to_excel(data, file_name: str = "orders.xlsx"):
             data.get("id"),
             data.get("name"),
             data.get("phone"),
+            data.get("source", "غير محدد"),
             data.get("city"),
             data.get("area"),
             data.get("order_type"),
@@ -167,6 +177,7 @@ def create_ready_orders_file():
             "رقم الطلب",
             "الاسم",
             "الهاتف",
+            "المصدر",
             "المحافظة",
             "المنطقة",
             "النوع",
@@ -187,6 +198,7 @@ def create_ready_orders_file():
                     order_id,
                     data.get("name"),
                     data.get("phone"),
+                    data.get("source", "غير محدد"),
                     data.get("city"),
                     data.get("area"),
                     data.get("order_type"),
@@ -247,7 +259,6 @@ def get_status_buttons(order_id: int, current_group: str = "new") -> InlineKeybo
     if current_group != "issues":
         kb.insert(InlineKeyboardButton("⚠️ مشاكل", callback_data=f"move_{order_id}_issues"))
     
-    # أضف زر التعديل
     kb.insert(InlineKeyboardButton("📝 تعديل", callback_data=f"edit_{order_id}"))
     
     return kb
@@ -257,12 +268,14 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     hand = data.get("hand_type", "لا يوجد")
     box = data.get("box_color", "لا يوجد")
     dist = data.get("dist_count", "لا يوجد")
+    source = data.get("source", "غير محدد")
     group_display = GROUPS_NAMES.get(GROUPS_MAP.get(current_group), "غير معروف")
 
     text = f"""📦 *طلب #{order_id}*
 
 👤 *الاسم:* {data['name']}
 📞 *الهاتف:* {data['phone']}
+📱 *المصدر:* {source}
 📍 *المحافظة - المنطقة:* {data['city']} - {data['area']}
 
 🧵 *النوع:* {data['order_type']}
@@ -311,6 +324,13 @@ def get_cities_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     for city in cities_list:
         kb.insert(InlineKeyboardButton(f"📍 {city}", callback_data=f"city_{city}"))
+    return kb
+
+def get_sources_kb() -> InlineKeyboardMarkup:
+    """لوحة مفاتيح مصادر الطلب"""
+    kb = InlineKeyboardMarkup(row_width=2)
+    for source in sources_list:
+        kb.insert(InlineKeyboardButton(f"📱 {source}", callback_data=f"source_{source}"))
     return kb
 
 def get_order_type_kb() -> InlineKeyboardMarkup:
@@ -440,7 +460,14 @@ async def process_phone(msg: types.Message, state: FSMContext):
         await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
         return
     await state.update_data(phone=phone)
-    await msg.answer("📍 اختر المحافظة:", reply_markup=get_cities_kb())
+    await msg.answer("📱 اختر مصدر الطلب:", reply_markup=get_sources_kb())
+    await OrderState.source.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("source_"), state=OrderState.source)
+async def process_source(call: types.CallbackQuery, state: FSMContext):
+    source = call.data.replace("source_", "")
+    await state.update_data(source=source)
+    await call.message.answer("📍 اختر المحافظة:", reply_markup=get_cities_kb())
     await OrderState.city.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("city_"), state=OrderState.city)
