@@ -261,9 +261,34 @@ def create_ready_orders_file():
         return None
 
 # ================= VALIDATION FUNCTIONS =================
+PERSIAN_ARABIC_DIGITS_MAP = str.maketrans({
+    "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
+    "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
+    "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+    "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9"
+})
+
+def normalize_digits(text: str) -> str:
+    return text.translate(PERSIAN_ARABIC_DIGITS_MAP)
+
+def normalize_phone(phone: str) -> str:
+    # دعم الأرقام الفارسية/العربية وإزالة أي فواصل أو رموز
+    normalized = normalize_digits(phone.strip())
+    digits_only = re.sub(r"\D", "", normalized)
+
+    # تحويل كود الدولة العراقي إلى 0
+    if digits_only.startswith("00964"):
+        rest = digits_only[5:]
+        digits_only = rest if rest.startswith("0") else f"0{rest}"
+    elif digits_only.startswith("964"):
+        rest = digits_only[3:]
+        digits_only = rest if rest.startswith("0") else f"0{rest}"
+
+    return digits_only
+
 def validate_phone(phone: str) -> bool:
-    phone = phone.strip()
-    return bool(re.match(r'^[0-9\+\-\s\(\)]{7,15}$', phone))
+    normalized = normalize_phone(phone)
+    return normalized.startswith("07") and len(normalized) == 11 and normalized.isdigit()
 
 def validate_price(price: str) -> bool:
     price = price.strip()
@@ -340,7 +365,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 🎉 *عدد التوزيعات:* {dist}
 
 📏 *القياس:* {data['size']}
-💰 *السعر:* {data['price']} ر.س
+💰 *السعر:* {data['price']} دينار عراقي
 
 📝 *الملاحظات:*
 {data['notes']}
@@ -390,8 +415,7 @@ def get_order_type_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.add(
         InlineKeyboardButton("🖨 طباعة", callback_data="type_print"),
-        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb"),
-        InlineKeyboardButton("⚽ رياضي", callback_data="type_sport")
+        InlineKeyboardButton("🧵 تطريز", callback_data="type_emb")
     )
     return kb
 
@@ -405,9 +429,30 @@ def get_teams_kb() -> InlineKeyboardMarkup:
     return kb
 
 pieces_list = [
-    "سيت 3", "سيت 6", "سيت 8", "أوفر", "كلو", "صدرية", 
+    "سيت 3", "سيت 6", "سيت رياضي", "أوفر", "كلو", "صدرية", 
     "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
 ]
+
+async def route_after_piece_selection(target_message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("need_over"):
+        await target_message.answer("✨ نوع الأوفر:", reply_markup=get_over_type_kb())
+        await OrderState.over_type.set()
+        return
+    if data.get("need_hand"):
+        await target_message.answer("🛏 نوع الملحف:", reply_markup=get_hand_type_kb())
+        await OrderState.hand_type.set()
+        return
+    if data.get("need_box"):
+        await target_message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
+        await OrderState.box_color.set()
+        return
+    if data.get("need_dist"):
+        await target_message.answer("🎉 اكتب عدد التوزيعات:")
+        await OrderState.dist_count.set()
+        return
+    await target_message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
+    await OrderState.size.set()
 
 def get_pieces_kb(selected: list) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
@@ -527,11 +572,12 @@ async def process_name(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.phone)
 async def process_phone(msg: types.Message, state: FSMContext):
-    phone = msg.text.strip()
-    if not validate_phone(phone):
-        await msg.answer("❌ صيغة الهاتف غير صحيحة، حاول مرة أخرى:")
+    raw_phone = msg.text.strip()
+    normalized_phone = normalize_phone(raw_phone)
+    if not validate_phone(raw_phone):
+        await msg.answer("❌ رقم الهاتف غير صحيح. يجب أن يبدأ بـ 07 ويكون 11 رقم:")
         return
-    await state.update_data(phone=phone)
+    await state.update_data(phone=normalized_phone)
     await msg.answer("📱 اختر مصدر الطلب:", reply_markup=get_sources_kb())
     await OrderState.source.set()
 
@@ -563,20 +609,13 @@ async def process_area(msg: types.Message, state: FSMContext):
 async def process_order_type(call: types.CallbackQuery, state: FSMContext):
     if call.data == "type_print":
         order_type = "طباعة"
-    elif call.data == "type_emb":
-        order_type = "تطريز"
     else:
-        order_type = "رياضي"
+        order_type = "تطريز"
 
     await state.update_data(order_type=order_type)
 
-    if order_type == "رياضي":
-        await call.message.answer("⚽ اختر الفريق:", reply_markup=get_teams_kb())
-        await OrderState.team.set()
-        return
-
     await call.message.edit_text("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
-    await state.update_data(pieces=[])
+    await state.update_data(pieces=[], team=None, sport_number=None)
     await OrderState.pieces.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("team_"), state=OrderState.team)
@@ -604,15 +643,13 @@ async def process_team_other(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.sport_number)
 async def process_sport_number(msg: types.Message, state: FSMContext):
-    sport_number = msg.text.strip()
+    sport_number = normalize_digits(msg.text.strip())
     if not validate_sport_number(sport_number):
         await msg.answer("❌ اكتب رقم صحيح (أرقام فقط):")
         return
 
     await state.update_data(sport_number=sport_number)
-    await msg.answer("👕 اختر القطع:", reply_markup=get_pieces_kb([]))
-    await state.update_data(pieces=[])
-    await OrderState.pieces.set()
+    await route_after_piece_selection(msg, state)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("piece_"), state=OrderState.pieces)
 async def process_pieces(call: types.CallbackQuery, state: FSMContext):
@@ -633,29 +670,27 @@ async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
     if not pieces:
         await call.answer("❌ اختر قطعة واحدة على الأقل!", show_alert=True)
         return
-    need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 8"])
-    need_hand = any(p in pieces for p in ["ملحف", "سيت 8"])
+    need_sport = "سيت رياضي" in pieces
+    need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 6"])
+    need_hand = "ملحف" in pieces
     need_box = "بوكس ككو" in pieces
     need_dist = "توزيعات" in pieces
-    await state.update_data(need_over=need_over, need_hand=need_hand, need_box=need_box, need_dist=need_dist)
-    if need_over:
-        await call.message.answer("✨ نوع الأوفر:", reply_markup=get_over_type_kb())
-        await OrderState.over_type.set()
+    await state.update_data(
+        need_sport=need_sport,
+        need_over=need_over,
+        need_hand=need_hand,
+        need_box=need_box,
+        need_dist=need_dist,
+        team=None if not need_sport else (data.get("team") if data.get("team") else None),
+        sport_number=None if not need_sport else (data.get("sport_number") if data.get("sport_number") else None)
+    )
+
+    if need_sport:
+        await call.message.answer("⚽ اختر الفريق:", reply_markup=get_teams_kb())
+        await OrderState.team.set()
         return
-    if need_hand:
-        await call.message.answer("🛏 نوع الملحف:", reply_markup=get_hand_type_kb())
-        await OrderState.hand_type.set()
-        return
-    if need_box:
-        await call.message.answer("🎁 اختر لون البوكس:", reply_markup=get_box_color_kb())
-        await OrderState.box_color.set()
-        return
-    if need_dist:
-        await call.message.answer("🎉 اكتب عدد التوزيعات:")
-        await OrderState.dist_count.set()
-        return
-    await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
-    await OrderState.size.set()
+
+    await route_after_piece_selection(call.message, state)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("over_"), state=OrderState.over_type)
 async def process_over_type(call: types.CallbackQuery, state: FSMContext):
@@ -872,9 +907,12 @@ async def save_edited_field(msg: types.Message, state: FSMContext):
             return
         
         # التحقق من صحة البيانات
-        if field_name == "phone" and not validate_phone(new_value):
-            await msg.answer("❌ رقم الهاتف غير صحيح! حاول مرة أخرى:")
-            return
+        if field_name == "phone":
+            normalized_phone = normalize_phone(new_value)
+            if not validate_phone(new_value):
+                await msg.answer("❌ رقم الهاتف غير صحيح. يجب أن يبدأ بـ 07 ويكون 11 رقم:")
+                return
+            new_value = normalized_phone
         
         if field_name == "price" and not validate_price(new_value):
             await msg.answer("❌ السعر غير صحيح! حاول مرة أخرى:")
