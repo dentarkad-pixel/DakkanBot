@@ -31,15 +31,25 @@ def env_int(name: str, default=None):
         print(f"⚠️ قيمة غير صالحة في {name}: {value}")
         return default
 
-# Optional topics mode (forum group):
-# FORUM_GROUP_ID + TOPIC_*_ID
-FORUM_GROUP_ID = env_int("FORUM_GROUP_ID")
-TOPIC_IDS = {
-    "new": env_int("TOPIC_NEW_ID"),
-    "design": env_int("TOPIC_DESIGN_ID"),
-    "ready": env_int("TOPIC_READY_ID"),
-    "sent": env_int("TOPIC_SENT_ID"),
-    "issues": env_int("TOPIC_ISSUES_ID")
+# Optional hybrid mode:
+# الطلبات الجديدة فقط داخل Topics بكروب واحد (افتراضيا نفس GROUP_NEW).
+# FORUM_GROUP_ID (اختياري) + TOPIC_NEW_*_ID
+FORUM_GROUP_ID = env_int("FORUM_GROUP_ID", GROUP_NEW)
+TOPIC_NEW_ID = env_int("TOPIC_NEW_ID")
+
+# Default topic IDs from provided topic links in GROUP_NEW
+DEFAULT_TOPIC_IDS = {
+    "new_printing": 61,
+    "new_sport_sets": 59,
+    "new_embroidery": 187,
+    "new_urgent": 192,
+}
+
+CLASSIFIED_TOPIC_IDS = {
+    "new_sport_sets": env_int("TOPIC_NEW_SPORT_SETS_ID") or env_int("TOPIC_SPORT_ID") or DEFAULT_TOPIC_IDS["new_sport_sets"],
+    "new_embroidery": env_int("TOPIC_NEW_EMBROIDERY_ID") or env_int("TOPIC_EMBROIDERY_ID") or DEFAULT_TOPIC_IDS["new_embroidery"],
+    "new_printing": env_int("TOPIC_NEW_PRINTING_ID") or env_int("TOPIC_PRINTING_ID") or DEFAULT_TOPIC_IDS["new_printing"],
+    "new_urgent": env_int("TOPIC_NEW_URGENT_ID") or env_int("TOPIC_URGENT_ID") or DEFAULT_TOPIC_IDS["new_urgent"]
 }
 
 STATUS_DISPLAY_NAMES = {
@@ -47,24 +57,40 @@ STATUS_DISPLAY_NAMES = {
     "design": "تم التصميم",
     "ready": "مجهز",
     "sent": "تم الإرسال",
-    "issues": "مشاكل"
+    "issues": "مشاكل",
+    "new_sport_sets": "طلبات جديدة - سيتات رياضية",
+    "new_embroidery": "طلبات جديدة - تطريز",
+    "new_printing": "طلبات جديدة - طباعة",
+    "new_urgent": "طلبات جديدة - مستعجل"
 }
 
-USE_FORUM_TOPICS = FORUM_GROUP_ID is not None and all(TOPIC_IDS.get(s) for s in TOPIC_IDS)
+USE_FORUM_TOPICS = all(CLASSIFIED_TOPIC_IDS.get(s) for s in CLASSIFIED_TOPIC_IDS)
 
 if USE_FORUM_TOPICS:
+    new_fallback_thread = TOPIC_NEW_ID or CLASSIFIED_TOPIC_IDS["new_printing"]
     TARGETS_MAP = {
-        status: {"chat_id": FORUM_GROUP_ID, "thread_id": TOPIC_IDS[status]}
-        for status in STATUS_DISPLAY_NAMES
+        "new": {"chat_id": FORUM_GROUP_ID, "thread_id": new_fallback_thread},
+        "design": {"chat_id": GROUP_DESIGN, "thread_id": None},
+        "ready": {"chat_id": GROUP_READY, "thread_id": None},
+        "sent": {"chat_id": GROUP_SENT, "thread_id": None},
+        "issues": {"chat_id": GROUP_ISSUES, "thread_id": None},
+        "new_sport_sets": {"chat_id": FORUM_GROUP_ID, "thread_id": CLASSIFIED_TOPIC_IDS["new_sport_sets"] or new_fallback_thread},
+        "new_embroidery": {"chat_id": FORUM_GROUP_ID, "thread_id": CLASSIFIED_TOPIC_IDS["new_embroidery"] or new_fallback_thread},
+        "new_printing": {"chat_id": FORUM_GROUP_ID, "thread_id": CLASSIFIED_TOPIC_IDS["new_printing"] or new_fallback_thread},
+        "new_urgent": {"chat_id": FORUM_GROUP_ID, "thread_id": CLASSIFIED_TOPIC_IDS["new_urgent"] or new_fallback_thread}
     }
-    print("✅ وضع Topics مفعل")
+    print(f"✅ وضع Topics مفعل للطلبات الجديدة داخل الكروب: {FORUM_GROUP_ID}")
 else:
     TARGETS_MAP = {
         "new": {"chat_id": GROUP_NEW, "thread_id": None},
         "design": {"chat_id": GROUP_DESIGN, "thread_id": None},
         "ready": {"chat_id": GROUP_READY, "thread_id": None},
         "sent": {"chat_id": GROUP_SENT, "thread_id": None},
-        "issues": {"chat_id": GROUP_ISSUES, "thread_id": None}
+        "issues": {"chat_id": GROUP_ISSUES, "thread_id": None},
+        "new_sport_sets": {"chat_id": GROUP_NEW, "thread_id": None},
+        "new_embroidery": {"chat_id": GROUP_NEW, "thread_id": None},
+        "new_printing": {"chat_id": GROUP_NEW, "thread_id": None},
+        "new_urgent": {"chat_id": GROUP_NEW, "thread_id": None}
     }
 
 def get_target(status: str) -> dict:
@@ -73,6 +99,19 @@ def get_target(status: str) -> dict:
 def get_target_key(status: str):
     target = get_target(status)
     return (target["chat_id"], target["thread_id"] or 0)
+
+def resolve_new_order_status(data: dict) -> str:
+    if data.get("is_urgent"):
+        return "new_urgent"
+
+    pieces = data.get("pieces", [])
+    if len(pieces) == 1 and pieces[0] == "سيت رياضي":
+        return "new_sport_sets"
+
+    if data.get("order_type") == "تطريز":
+        return "new_embroidery"
+
+    return "new_printing"
 
 # الكليشية
 FOOTER_TEXT = """
@@ -103,6 +142,7 @@ class OrderState(StatesGroup):
     source = State()
     city = State()
     area = State()
+    urgent = State()
     order_type = State()
     team = State()
     team_other = State()
@@ -132,7 +172,7 @@ def init_excel_file(file_name: str = "orders.xlsx"):
             ws.title = "Orders"
             ws.append([
                 "رقم الطلب",
-                "الاسم",
+                "اسم الطفل",
                 "الهاتف",
                 "المصدر",
                 "المحافظة",
@@ -215,7 +255,7 @@ def create_ready_orders_file():
         
         ws.append([
             "رقم الطلب",
-            "الاسم",
+            "اسم الطفل",
             "الهاتف",
             "المصدر",
             "المحافظة",
@@ -340,6 +380,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     dist = data.get("dist_count", "لا يوجد")
     source = data.get("source", "غير محدد")
     group_display = STATUS_DISPLAY_NAMES.get(current_group, "غير معروف")
+    urgent_text = "نعم" if data.get("is_urgent") else "لا"
     team = data.get("team")
     sport_number = data.get("sport_number")
 
@@ -351,10 +392,11 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
 
     text = f"""📦 *طلب #{order_id}*
 
-👤 *الاسم:* {data['name']}
+    👤 *اسم الطفل:* {data['name']}
 📞 *الهاتف:* {data['phone']}
 📱 *المصدر:* {source}
 📍 *المحافظة - المنطقة:* {data['city']} - {data['area']}
+    ⏰ *مستعجل:* {urgent_text}
 
 🧵 *النوع:* {data['order_type']}
 {sport_line}
@@ -420,6 +462,14 @@ def get_order_type_kb() -> InlineKeyboardMarkup:
     )
     return kb
 
+def get_urgent_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ نعم", callback_data="urgent_yes"),
+        InlineKeyboardButton("❌ لا", callback_data="urgent_no")
+    )
+    return kb
+
 teams_list = ["برشلونة", "ريال مدريد", "بايرن", "مانشستر يونايتد", "مانشستر سيتي", "تشيلسي", "ليفربول", "باريس سان جيرمان", "يوفنتوس", "أرسنال"]
 
 def get_teams_kb() -> InlineKeyboardMarkup:
@@ -431,7 +481,7 @@ def get_teams_kb() -> InlineKeyboardMarkup:
 
 pieces_list = [
     "سيت 3", "سيت 6", "سيت رياضي", "أوفر", "كلو", "صدرية", 
-    "حضينة وكماط", "ملحف", "بوكس ككو", "توزيعات"
+    "حضينة وكماط", "ملحف", "شفقات", "وشاح", "بوكس ككو", "توزيعات"
 ]
 
 async def route_after_piece_selection(target_message: types.Message, state: FSMContext):
@@ -503,7 +553,7 @@ def get_edit_options_kb(order_id: int) -> InlineKeyboardMarkup:
     """لوحة مفاتيح خيارات التعديل"""
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("👤 الاسم", callback_data=f"field_name_{order_id}"),
+        InlineKeyboardButton("👤 اسم الطفل", callback_data=f"field_name_{order_id}"),
         InlineKeyboardButton("📞 الهاتف", callback_data=f"field_phone_{order_id}"),
         InlineKeyboardButton("💰 السعر", callback_data=f"field_price_{order_id}"),
         InlineKeyboardButton("📝 ملاحظات", callback_data=f"field_notes_{order_id}"),
@@ -520,7 +570,7 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 @dp.message_handler(commands=['new'])
 async def cmd_new(msg: types.Message, state: FSMContext):
     await state.finish()
-    await msg.answer("👤 اسم الزبون:")
+    await msg.answer("👤 اسم الطفل:")
     await OrderState.name.set()
 
 @dp.message_handler(commands=['cancel'], state='*')
@@ -565,7 +615,7 @@ async def cmd_download(msg: types.Message):
 async def process_name(msg: types.Message, state: FSMContext):
     name = msg.text.strip()
     if len(name) < 2:
-        await msg.answer("❌ الاسم قصير جداً، حاول مرة أخرى:")
+        await msg.answer("❌ اسم الطفل قصير جداً، حاول مرة أخرى:")
         return
     await state.update_data(name=name)
     await msg.answer("📞 رقم الهاتف:")
@@ -603,7 +653,15 @@ async def process_area(msg: types.Message, state: FSMContext):
         await msg.answer("❌ اسم المنطقة قصير جداً، حاول مرة أخرى:")
         return
     await state.update_data(area=area)
-    await msg.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await msg.answer("⏰ هل الطلب مستعجل؟", reply_markup=get_urgent_kb())
+    await OrderState.urgent.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("urgent_"), state=OrderState.urgent)
+async def process_urgent(call: types.CallbackQuery, state: FSMContext):
+    is_urgent = call.data == "urgent_yes"
+    await state.update_data(is_urgent=is_urgent)
+    await call.message.answer("🧵 اختر نوع الطلب:", reply_markup=get_order_type_kb())
+    await call.answer()
     await OrderState.order_type.set()
 
 @dp.callback_query_handler(lambda c: c.data.startswith("type_"), state=OrderState.order_type)
@@ -807,15 +865,16 @@ async def finish_order(msg: types.Message, state: FSMContext):
         orders_data[order_id] = {
             "data": data,
             "images": images_list,
-            "current_group": "new"
+            "current_group": resolve_new_order_status(data)
         }
 
         save_to_excel(data, "orders.xlsx")
 
-        text = format_order_text(data, order_id, "new")
-        status_kb = get_status_buttons(order_id, "new")
-        target = get_target("new")
-        target_key = get_target_key("new")
+        intake_status = orders_data[order_id]["current_group"]
+        text = format_order_text(data, order_id, intake_status)
+        status_kb = get_status_buttons(order_id, intake_status)
+        target = get_target(intake_status)
+        target_key = get_target_key(intake_status)
         send_kwargs = {}
         if target["thread_id"]:
             send_kwargs["message_thread_id"] = target["thread_id"]
@@ -879,7 +938,7 @@ async def choose_field(call: types.CallbackQuery, state: FSMContext):
         order_id = int(parts[2])
         
         field_display = {
-            "name": "الاسم",
+            "name": "اسم الطفل",
             "phone": "الهاتف",
             "price": "السعر",
             "notes": "الملاحظات"
@@ -967,12 +1026,17 @@ async def save_edited_field(msg: types.Message, state: FSMContext):
         await msg.answer(f"❌ خطأ: {str(e)}")
         await state.finish()
 
-@dp.callback_query_handler(lambda c: c.data.startswith("cancel_edit_"))
+@dp.callback_query_handler(lambda c: c.data.startswith("cancel_edit_"), state='*')
 async def cancel_edit(call: types.CallbackQuery, state: FSMContext):
     """إلغاء التعديل"""
     try:
         await state.finish()
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await call.answer("❌ تم إلغاء التعديل", show_alert=False)
+        await call.message.answer("✅ تم إلغاء التعديل")
     except Exception as e:
         print(f"❌ خطأ: {e}")
 
@@ -993,14 +1057,18 @@ async def move_order(call: types.CallbackQuery):
         images_list = order_info["images"]
         current_group = order_info["current_group"]
 
-        if current_group == target_group_name:
+        destination_status = target_group_name
+        if target_group_name == "new":
+            destination_status = resolve_new_order_status(data)
+
+        if current_group == destination_status:
             await call.answer("🔔 موجود هنا!", show_alert=True)
             return
 
-        target = get_target(target_group_name)
-        target_key = get_target_key(target_group_name)
-        text = format_order_text(data, order_id, target_group_name)
-        status_kb = get_status_buttons(order_id, target_group_name)
+        target = get_target(destination_status)
+        target_key = get_target_key(destination_status)
+        text = format_order_text(data, order_id, destination_status)
+        status_kb = get_status_buttons(order_id, destination_status)
 
         current_target = get_target(current_group)
         current_target_key = get_target_key(current_group)
@@ -1045,9 +1113,9 @@ async def move_order(call: types.CallbackQuery):
             message_ids[order_id][target_key] = []
         message_ids[order_id][target_key].append(msg_text.message_id)
         
-        orders_data[order_id]["current_group"] = target_group_name
+        orders_data[order_id]["current_group"] = destination_status
 
-        target_name = STATUS_DISPLAY_NAMES.get(target_group_name, target_group_name)
+        target_name = STATUS_DISPLAY_NAMES.get(destination_status, destination_status)
         await call.answer(f"✅ {target_name}", show_alert=False)
 
     except Exception as e:
@@ -1069,4 +1137,3 @@ if __name__ == "__main__":
         await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
 
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
-
