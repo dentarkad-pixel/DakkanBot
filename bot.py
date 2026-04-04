@@ -347,8 +347,8 @@ def validate_dist_count(count: str) -> bool:
         return False
 
 def validate_sport_number(num: str) -> bool:
-    num = num.strip()
-    return num.isdigit() and len(num) <= 3
+    # للسيت الرياضي نسمح بأي كتابة على الظهر (أرقام/حروف/رموز)
+    return len(num.strip()) > 0
 
 # ================= HELPER FUNCTIONS =================
 def get_status_buttons(order_id: int, current_group: str = "new") -> InlineKeyboardMarkup:
@@ -702,9 +702,9 @@ async def process_team_other(msg: types.Message, state: FSMContext):
 
 @dp.message_handler(state=OrderState.sport_number)
 async def process_sport_number(msg: types.Message, state: FSMContext):
-    sport_number = normalize_digits(msg.text.strip())
+    sport_number = msg.text.strip()
     if not validate_sport_number(sport_number):
-        await msg.answer("❌ اكتب رقم صحيح (أرقام فقط):")
+        await msg.answer("❌ اكتب قيمة الظهر:")
         return
 
     await state.update_data(sport_number=sport_number)
