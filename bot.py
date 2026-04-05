@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
@@ -126,6 +127,57 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 orders_data = {}
 message_ids = {}
+STATE_FILE = "orders_state.json"
+
+def _encode_message_ids(ids_map: dict) -> dict:
+    encoded = {}
+    for order_id, targets in ids_map.items():
+        encoded[str(order_id)] = {}
+        for target_key, msg_list in targets.items():
+            if isinstance(target_key, tuple):
+                chat_id, thread_id = target_key
+            else:
+                # توافق مع النسخ القديمة التي كانت تستخدم chat_id فقط.
+                chat_id, thread_id = int(target_key), 0
+            encoded[str(order_id)][f"{chat_id}:{thread_id}"] = msg_list
+    return encoded
+
+def _decode_message_ids(ids_map: dict) -> dict:
+    decoded = {}
+    for order_id, targets in ids_map.items():
+        oid = int(order_id)
+        decoded[oid] = {}
+        for key, msg_list in targets.items():
+            if ":" in key:
+                chat_id_str, thread_id_str = key.split(":", 1)
+                decoded[oid][(int(chat_id_str), int(thread_id_str))] = msg_list
+            else:
+                decoded[oid][(int(key), 0)] = msg_list
+    return decoded
+
+def save_runtime_state(file_name: str = STATE_FILE):
+    try:
+        payload = {
+            "orders_data": {str(k): v for k, v in orders_data.items()},
+            "message_ids": _encode_message_ids(message_ids)
+        }
+        with open(file_name, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ تعذر حفظ حالة البوت: {e}")
+
+def load_runtime_state(file_name: str = STATE_FILE):
+    global orders_data, message_ids
+    try:
+        if not os.path.exists(file_name):
+            return
+        with open(file_name, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        orders_data = {int(k): v for k, v in payload.get("orders_data", {}).items()}
+        message_ids = _decode_message_ids(payload.get("message_ids", {}))
+        print(f"✅ تم تحميل حالة البوت: {len(orders_data)} طلب")
+    except Exception as e:
+        print(f"⚠️ تعذر تحميل حالة البوت: {e}")
 
 # ================= مصادر الطلب =================
 sources_list = [
@@ -150,6 +202,7 @@ class OrderState(StatesGroup):
     pieces = State()
     over_type = State()
     hand_type = State()
+    scarf_owner = State()
     box_color = State()
     dist_count = State()
     size = State()
@@ -179,6 +232,7 @@ def init_excel_file(file_name: str = "orders.xlsx"):
                 "المنطقة",
                 "النوع",
                 "القطع",
+                "صاحب الوشاح",
                 "الأوفر",
                 "الملحف",
                 "لون البوكس",
@@ -229,6 +283,7 @@ def save_to_excel(data, file_name: str = "orders.xlsx"):
             data.get("area"),
             data.get("order_type"),
             ",".join(data.get("pieces", [])),
+            data.get("scarf_owner", "لا يوجد"),
             data.get("over_type", "لا يوجد"),
             data.get("hand_type", "لا يوجد"),
             data.get("box_color", "لا يوجد"),
@@ -262,6 +317,7 @@ def create_ready_orders_file():
             "المنطقة",
             "النوع",
             "القطع",
+            "صاحب الوشاح",
             "الأوفر",
             "الملحف",
             "لون البوكس",
@@ -283,6 +339,7 @@ def create_ready_orders_file():
                     data.get("area"),
                     data.get("order_type"),
                     ",".join(data.get("pieces", [])),
+                    data.get("scarf_owner", "لا يوجد"),
                     data.get("over_type", "لا يوجد"),
                     data.get("hand_type", "لا يوجد"),
                     data.get("box_color", "لا يوجد"),
@@ -381,6 +438,7 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     source = data.get("source", "غير محدد")
     group_display = STATUS_DISPLAY_NAMES.get(current_group, "غير معروف")
     urgent_text = "نعم" if data.get("is_urgent") else "لا"
+    scarf_owner = data.get("scarf_owner")
     team = data.get("team")
     sport_number = data.get("sport_number")
 
@@ -390,17 +448,22 @@ def format_order_text(data: dict, order_id: int, current_group: str = "new") -> 
     if sport_number:
         sport_line += f"\n🔢 *الرقم:* {sport_number}"
 
+    scarf_line = ""
+    if scarf_owner:
+        scarf_line = f"\n🧣 *صاحب الوشاح:* {scarf_owner}"
+
     text = f"""📦 *طلب #{order_id}*
 
-    👤 *اسم الطفل:* {data['name']}
+👤 *اسم الطفل:* {data['name']}
 📞 *الهاتف:* {data['phone']}
 📱 *المصدر:* {source}
 📍 *المحافظة - المنطقة:* {data['city']} - {data['area']}
-    ⏰ *مستعجل:* {urgent_text}
+⏰ *مستعجل:* {urgent_text}
 
 🧵 *النوع:* {data['order_type']}
 {sport_line}
 👕 *القطع:* {', '.join(data['pieces'])}
+{scarf_line}
 
 👗 *الأوفر:* {over}
 🛏 *الملحف:* {hand}
@@ -502,6 +565,10 @@ async def route_after_piece_selection(target_message: types.Message, state: FSMC
         await target_message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
+    if data.get("need_scarf"):
+        await target_message.answer("🧣 صاحب الوشاح؟", reply_markup=get_scarf_owner_kb())
+        await OrderState.scarf_owner.set()
+        return
     await target_message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
@@ -526,8 +593,16 @@ def get_over_type_kb() -> InlineKeyboardMarkup:
 def get_hand_type_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("🎀 كشكش", callback_data="hand_كشكش"),
-        InlineKeyboardButton("🌸 حب الرمان", callback_data="hand_حب الرمان")
+        InlineKeyboardButton("🎀 كركرش", callback_data="hand_كركرش"),
+        InlineKeyboardButton("🌸 حب رمان", callback_data="hand_حب رمان")
+    )
+    return kb
+
+def get_scarf_owner_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("👦 ولد", callback_data="scarf_ولد"),
+        InlineKeyboardButton("👧 بنية", callback_data="scarf_بنية")
     )
     return kb
 
@@ -590,7 +665,17 @@ async def cmd_download(msg: types.Message):
                     if info.get("current_group") == "ready"}
     
     if not ready_orders:
-        await msg.answer("❌ لا توجد طلبات في كروب 'مجهز' حتى الآن!")
+        # fallback: إرسال ملف كل الطلبات القديمة الموجود في الإكسل
+        if os.path.exists("orders.xlsx"):
+            with open("orders.xlsx", 'rb') as file:
+                await bot.send_document(
+                    chat_id=msg.from_user.id,
+                    document=types.InputFile("orders.xlsx"),
+                    caption="📊 لا توجد حالات مجهز محفوظة حالياً، تم إرسال أرشيف الطلبات من الإكسل"
+                )
+            await msg.answer("✅ تم إرسال الأرشيف من orders.xlsx")
+        else:
+            await msg.answer("❌ لا توجد طلبات في كروب 'مجهز' حتى الآن!")
         return
     
     try:
@@ -731,15 +816,18 @@ async def process_done_pieces(call: types.CallbackQuery, state: FSMContext):
         return
     need_sport = "سيت رياضي" in pieces
     need_over = any(p in pieces for p in ["أوفر", "سيت 3", "سيت 6"])
-    need_hand = "ملحف" in pieces
+    need_hand = any(p in pieces for p in ["ملحف", "سيت 6"])
+    need_scarf = "وشاح" in pieces
     need_box = "بوكس ككو" in pieces
     need_dist = "توزيعات" in pieces
     await state.update_data(
         need_sport=need_sport,
         need_over=need_over,
         need_hand=need_hand,
+        need_scarf=need_scarf,
         need_box=need_box,
         need_dist=need_dist,
+        scarf_owner=None if not need_scarf else (data.get("scarf_owner") if data.get("scarf_owner") else None),
         team=None if not need_sport else (data.get("team") if data.get("team") else None),
         sport_number=None if not need_sport else (data.get("sport_number") if data.get("sport_number") else None)
     )
@@ -768,6 +856,10 @@ async def process_over_type(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
+    if data.get("need_scarf"):
+        await call.message.answer("🧣 صاحب الوشاح؟", reply_markup=get_scarf_owner_kb())
+        await OrderState.scarf_owner.set()
+        return
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
@@ -784,6 +876,10 @@ async def process_hand_type(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
+    if data.get("need_scarf"):
+        await call.message.answer("🧣 صاحب الوشاح؟", reply_markup=get_scarf_owner_kb())
+        await OrderState.scarf_owner.set()
+        return
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
@@ -796,6 +892,17 @@ async def process_box_color(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("🎉 اكتب عدد التوزيعات:")
         await OrderState.dist_count.set()
         return
+    if data.get("need_scarf"):
+        await call.message.answer("🧣 صاحب الوشاح؟", reply_markup=get_scarf_owner_kb())
+        await OrderState.scarf_owner.set()
+        return
+    await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
+    await OrderState.size.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("scarf_"), state=OrderState.scarf_owner)
+async def process_scarf_owner(call: types.CallbackQuery, state: FSMContext):
+    scarf_owner = call.data.replace("scarf_", "")
+    await state.update_data(scarf_owner=scarf_owner)
     await call.message.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
@@ -809,6 +916,11 @@ async def process_dist_count(msg: types.Message, state: FSMContext):
         await msg.answer("❌ أدخل رقماً صحيحاً أكبر من 0:")
         return
     await state.update_data(dist_count=count)
+    data = await state.get_data()
+    if data.get("need_scarf"):
+        await msg.answer("🧣 صاحب الوشاح؟", reply_markup=get_scarf_owner_kb())
+        await OrderState.scarf_owner.set()
+        return
     await msg.answer("📏 اختر القياس:", reply_markup=get_size_kb())
     await OrderState.size.set()
 
@@ -867,6 +979,7 @@ async def finish_order(msg: types.Message, state: FSMContext):
             "images": images_list,
             "current_group": resolve_new_order_status(data)
         }
+        save_runtime_state()
 
         save_to_excel(data, "orders.xlsx")
 
@@ -1017,6 +1130,7 @@ async def save_edited_field(msg: types.Message, state: FSMContext):
         
         # حدّث Excel
         save_to_excel(orders_data[order_id]["data"], "orders.xlsx")
+        save_runtime_state()
         
         await msg.answer(f"✅ تم تعديل الطلب #{order_id} بنجاح!")
         print(f"✅✅ انتهى التعديل بنجاح")
@@ -1114,6 +1228,7 @@ async def move_order(call: types.CallbackQuery):
         message_ids[order_id][target_key].append(msg_text.message_id)
         
         orders_data[order_id]["current_group"] = destination_status
+        save_runtime_state()
 
         target_name = STATUS_DISPLAY_NAMES.get(destination_status, destination_status)
         await call.answer(f"✅ {target_name}", show_alert=False)
@@ -1126,6 +1241,7 @@ if __name__ == "__main__":
     print("🚀 البوت يعمل...")
     init_excel_file("orders.xlsx")
     async def on_startup(dp: Dispatcher):
+        load_runtime_state()
         commands = [
             BotCommand("start", "بدء البوت"),
             BotCommand("new", "طلب جديد"),
